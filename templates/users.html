@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}จัดการผู้ใช้{% endblock %}
+{% block content %}
+
+<div class="page-header">
+  <h1>จัดการผู้ใช้งาน</h1>
+</div>
+
+<div class="card">
+  <h2>เพิ่มผู้ใช้ใหม่ / ลงทะเบียนลายนิ้วมือ</h2>
+  <form method="POST" action="{{ url_for('users_add') }}" class="form-grid">
+    <div class="field">
+      <label>รหัสนักศึกษา/บุคลากร</label>
+      <input type="text" name="student_id" required>
+    </div>
+    <div class="field">
+      <label>ชื่อ-นามสกุล</label>
+      <input type="text" name="full_name" required>
+    </div>
+    <div class="field">
+      <label>หน่วยงาน/คณะ/สาขา</label>
+      <input type="text" name="department">
+    </div>
+    <div class="field">
+      <label>รหัสลายนิ้วมือ (จาก SDK เครื่องสแกน)</label>
+      <input type="text" name="fingerprint_id" required placeholder="เช่น รหัสที่ได้ตอนลงทะเบียนนิ้วกับเครื่อง">
+    </div>
+    <div class="field submit">
+      <button type="submit">บันทึกผู้ใช้</button>
+    </div>
+  </form>
+  <p class="hint">
+    หมายเหตุ: การ "สแกนนิ้วเพื่อลงทะเบียน" (enrollment) ต้องทำผ่านโปรแกรม/SDK ของตัวเครื่องสแกนก่อน
+    เพื่อให้ได้ค่ารหัสลายนิ้วมือ (fingerprint_id) แล้วนำรหัสนั้นมากรอกในฟอร์มนี้เพื่อผูกกับข้อมูลบุคคล
+  </p>
+</div>
+
+<div class="card">
+  <h2>รายชื่อผู้ใช้ทั้งหมด ({{ users|length }})</h2>
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>รหัส</th>
+        <th>ชื่อ-นามสกุล</th>
+        <th>หน่วยงาน/สาขา</th>
+        <th>รหัสลายนิ้วมือ</th>
+        <th>ลงทะเบียนเมื่อ</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for u in users %}
+      <tr>
+        <td>{{ u.student_id }}</td>
+        <td>{{ u.full_name }}</td>
+        <td>{{ u.department or '-' }}</td>
+        <td><code>{{ u.fingerprint_id }}</code></td>
+        <td>{{ u.created_at }}</td>
+        <td>
+          <form method="POST" action="{{ url_for('users_delete', user_id=u.id) }}" onsubmit="return confirm('ยืนยันลบผู้ใช้นี้?');">
+            <button type="submit" class="btn-danger">ลบ</button>
+          </form>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" class="empty">ยังไม่มีผู้ใช้ในระบบ</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% endblock %}

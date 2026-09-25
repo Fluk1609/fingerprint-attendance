@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}แดชบอร์ด{% endblock %}
+{% block content %}
+
+<div class="page-header">
+  <h1>รายการสแกนล่าสุด</h1>
+  <span class="badge live">● อัปเดตอัตโนมัติทุก 5 วินาที</span>
+</div>
+
+<div class="card">
+  <table class="data-table" id="scan-table">
+    <thead>
+      <tr>
+        <th>เวลาที่สแกน</th>
+        <th>รหัสนักศึกษา/บุคลากร</th>
+        <th>ชื่อ-นามสกุล</th>
+        <th>หน่วยงาน/สาขา</th>
+        <th>สถานะ</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for log in logs %}
+      <tr>
+        <td>{{ log.scanned_at }}</td>
+        <td>{{ log.student_id or '-' }}</td>
+        <td>{{ log.full_name or '-' }}</td>
+        <td>{{ log.department or '-' }}</td>
+        <td>
+          {% if log.status == 'matched' %}
+            <span class="tag ok">พบข้อมูล</span>
+          {% else %}
+            <span class="tag warn">ไม่พบผู้ใช้ ({{ log.fingerprint_id }})</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="5" class="empty">ยังไม่มีรายการสแกน</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<script src="{{ url_for('static', filename='script.js') }}"></script>
+{% endblock %}
