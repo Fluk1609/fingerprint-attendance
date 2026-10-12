@@ -6,34 +6,71 @@
   <h1>จัดการผู้ใช้งาน</h1>
 </div>
 
+
+<div class="card">
+  <h2>นำเข้ารายชื่อจาก Excel</h2>
+
+  <p class="hint">
+    ไฟล์ Excel ต้องมีหัวคอลัมน์ student_id, full_name และ department
+  </p>
+
+  <form method="POST" action="{{ url_for('users_import_excel') }}" enctype="multipart/form-data" class="form-grid">
+    <div class="field">
+      <label>เลือกไฟล์ Excel</label>
+      <input type="file" name="excel_file" accept=".xlsx,.xlsm" required>
+    </div>
+
+    <div class="field submit">
+      <button type="submit">Import Excel</button>
+    </div>
+  </form>
+</div>
+
 <div class="card">
   <h2>เพิ่มผู้ใช้ใหม่ / ลงทะเบียนลายนิ้วมือ</h2>
-  <form method="POST" action="{{ url_for('users_add') }}" class="form-grid">
+
+  <form method="POST" action="{{ url_for('users_add') }}" class="form-grid" id="userForm">
+
     <div class="field">
       <label>รหัสนักศึกษา/บุคลากร</label>
-      <input type="text" name="student_id" required>
+      <input type="text" name="student_id" id="student_id" required placeholder="เช่น 1001">
     </div>
+
     <div class="field">
       <label>ชื่อ-นามสกุล</label>
       <input type="text" name="full_name" required>
     </div>
+
     <div class="field">
       <label>หน่วยงาน/คณะ/สาขา</label>
       <input type="text" name="department">
     </div>
+
     <div class="field">
-      <label>รหัสลายนิ้วมือ (จาก SDK เครื่องสแกน)</label>
-      <input type="text" name="fingerprint_id" required placeholder="เช่น รหัสที่ได้ตอนลงทะเบียนนิ้วกับเครื่อง">
+      <label>รหัสลายนิ้วมือ</label>
+      <input type="text" name="fingerprint_id" id="fingerprint_id" required readonly
+        placeholder="ใช้รหัสนักศึกษา/บุคลากร">
     </div>
+
+    <div class="field">
+      <button type="button" id="enrollButton">
+        ลงทะเบียนลายนิ้วมือ
+      </button>
+
+      <p id="enrollStatus" class="hint">
+        กรุณากรอกข้อมูล แล้วกดลงทะเบียนลายนิ้วมือ
+      </p>
+    </div>
+
     <div class="field submit">
-      <button type="submit">บันทึกผู้ใช้</button>
+      <button type="submit" id="saveButton" disabled>
+        บันทึกผู้ใช้
+      </button>
     </div>
   </form>
-  <p class="hint">
-    หมายเหตุ: การ "สแกนนิ้วเพื่อลงทะเบียน" (enrollment) ต้องทำผ่านโปรแกรม/SDK ของตัวเครื่องสแกนก่อน
-    เพื่อให้ได้ค่ารหัสลายนิ้วมือ (fingerprint_id) แล้วนำรหัสนั้นมากรอกในฟอร์มนี้เพื่อผูกกับข้อมูลบุคคล
-  </p>
 </div>
+
+
 
 <div class="card">
   <h2>รายชื่อผู้ใช้ทั้งหมด ({{ users|length }})</h2>
@@ -45,6 +82,7 @@
         <th>หน่วยงาน/สาขา</th>
         <th>รหัสลายนิ้วมือ</th>
         <th>ลงทะเบียนเมื่อ</th>
+        <th>จัดการ</th>
         <th></th>
       </tr>
     </thead>
@@ -57,16 +95,191 @@
         <td><code>{{ u.fingerprint_id }}</code></td>
         <td>{{ u.created_at }}</td>
         <td>
-          <form method="POST" action="{{ url_for('users_delete', user_id=u.id) }}" onsubmit="return confirm('ยืนยันลบผู้ใช้นี้?');">
+          <button type="button" class="enroll-user-btn" data-fingerprint-id="{{ u.fingerprint_id }}"
+            data-full-name="{{ u.full_name }}">
+            ลงทะเบียนลายนิ้วมือ
+          </button>
+        </td>
+        <td>
+          <form method="POST" action="{{ url_for('users_delete', user_id=u.id) }}"
+            onsubmit="return confirm('ยืนยันลบผู้ใช้นี้?');">
             <button type="submit" class="btn-danger">ลบ</button>
           </form>
         </td>
       </tr>
       {% else %}
-      <tr><td colspan="6" class="empty">ยังไม่มีผู้ใช้ในระบบ</td></tr>
+      <tr>
+        <td colspan="7" class="empty">ยังไม่มีผู้ใช้ในระบบ</td>
+      </tr>
       {% endfor %}
     </tbody>
   </table>
 </div>
 
+<script>
+  const userForm = document.getElementById('userForm');
+  const studentIdInput = document.getElementById('student_id');
+  const fingerprintIdInput = document.getElementById('fingerprint_id');
+  const enrollButton = document.getElementById('enrollButton');
+  const enrollStatus = document.getElementById('enrollStatus');
+  const saveButton = document.getElementById('saveButton');
+
+  let enrolledFingerprintId = null;
+  let isEnrolling = false;
+
+  studentIdInput.addEventListener('input', () => {
+    fingerprintIdInput.value = studentIdInput.value.trim();
+    enrolledFingerprintId = null;
+    saveButton.disabled = true;
+
+    enrollStatus.textContent =
+      'กรุณาลงทะเบียนลายนิ้วมือสำหรับรหัสนี้';
+  });
+
+  enrollButton.addEventListener('click', async () => {
+    const studentId = studentIdInput.value.trim();
+
+    if (!studentId) {
+      enrollStatus.textContent =
+        'กรุณากรอกรหัสนักศึกษา/บุคลากรก่อน';
+      studentIdInput.focus();
+      return;
+    }
+
+    if (isEnrolling) return;
+
+    isEnrolling = true;
+    enrollButton.disabled = true;
+    saveButton.disabled = true;
+    enrolledFingerprintId = null;
+
+    try {
+      const response = await fetch('/api/enroll', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fingerprint_id: studentId })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'ส่งคำขอลงทะเบียนไม่สำเร็จ');
+      }
+
+      const jobId = data.job_id;
+      enrollStatus.textContent =
+        'รอเครื่องสแกนรับงาน กรุณารอสักครู่...';
+
+      // ตรวจสอบสถานะทุก 1 วินาที
+      while (true) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+
+        const statusResponse = await fetch(
+          `/api/enroll/${encodeURIComponent(jobId)}`
+        );
+        const statusData = await statusResponse.json();
+
+        if (!statusResponse.ok) {
+          throw new Error(statusData.error || 'ตรวจสอบสถานะไม่สำเร็จ');
+        }
+
+        enrollStatus.textContent = statusData.message || 'กำลังดำเนินการ...';
+
+        if (statusData.status === 'success') {
+          enrolledFingerprintId = studentId;
+          fingerprintIdInput.value = studentId;
+          saveButton.disabled = false;
+          break;
+        }
+
+        if (statusData.status === 'failed') {
+          throw new Error(statusData.message || 'ลงทะเบียนไม่สำเร็จ');
+        }
+      }
+    } catch (error) {
+      enrolledFingerprintId = null;
+      saveButton.disabled = true;
+      enrollStatus.textContent =
+        error.message || 'เกิดข้อผิดพลาดในการลงทะเบียน';
+    } finally {
+      isEnrolling = false;
+      enrollButton.disabled = false;
+    }
+  });
+
+  userForm.addEventListener('submit', event => {
+    if (
+      !enrolledFingerprintId ||
+      enrolledFingerprintId !== studentIdInput.value.trim()
+    ) {
+      event.preventDefault();
+      enrollStatus.textContent =
+        'กรุณาลงทะเบียนลายนิ้วมือให้สำเร็จก่อนบันทึก';
+    }
+  });
+
+  document.querySelectorAll('.enroll-user-btn').forEach(button => {
+    button.addEventListener('click', async () => {
+      const fingerprintId = button.dataset.fingerprintId;
+      const fullName = button.dataset.fullName;
+
+      if (!confirm(`ลงทะเบียนลายนิ้วมือของ ${fullName} ใช่หรือไม่?`)) {
+        return;
+      }
+
+      button.disabled = true;
+      const originalText = button.textContent;
+      button.textContent = 'กำลังลงทะเบียน...';
+
+      try {
+        const response = await fetch('/api/enroll', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            fingerprint_id: fingerprintId
+          })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.error || 'ส่งคำขอไม่สำเร็จ');
+        }
+
+        while (true) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+
+          const statusResponse = await fetch(
+            `/api/enroll/${encodeURIComponent(data.job_id)}`
+          );
+          const status = await statusResponse.json();
+
+          if (!statusResponse.ok) {
+            throw new Error(status.error || 'ตรวจสอบสถานะไม่สำเร็จ');
+          }
+
+          button.textContent = status.message || 'กำลังดำเนินการ...';
+
+          if (status.status === 'success') {
+            alert(`ลงทะเบียนลายนิ้วมือของ ${fullName} สำเร็จ`);
+            location.reload();
+            return;
+          }
+
+          if (status.status === 'failed') {
+            throw new Error(status.message || 'ลงทะเบียนไม่สำเร็จ');
+          }
+        }
+      } catch (error) {
+        alert(error.message || 'เกิดข้อผิดพลาด');
+      } finally {
+        button.disabled = false;
+        button.textContent = originalText;
+      }
+    });
+  });
+
+</script>
+
 {% endblock %}
+

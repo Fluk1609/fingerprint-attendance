@@ -6,13 +6,13 @@ from supabase import create_client
 load_dotenv()
 
 url = os.getenv("SUPABASE_URL")
-key = os.getenv("SUPABASE_PUBLISHABLE_KEY")
+key = os.getenv("SUPABASE_KEY")
 
 if not url:
     raise Exception("❌ ไม่พบ SUPABASE_URL")
 
 if not key:
-    raise Exception("❌ ไม่พบ SUPABASE_PUBLISHABLE_KEY")
+    raise Exception("❌ ไม่พบ SUPABASE_KEY")
 
 print("URL:", url)
 print("กำลังเชื่อมต่อ Supabase...")
