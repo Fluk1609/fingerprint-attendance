@@ -7,7 +7,7 @@ async function refreshScans() {
     if (!tbody) return;
 
     if (logs.length === 0) {
-      tbody.innerHTML = `<tr><td colspan="5" class="empty">ยังไม่มีรายการสแกน</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="6" class="empty">ยังไม่มีรายการสแกน</td></tr>`;
       return;
     }
 
@@ -16,11 +16,14 @@ async function refreshScans() {
         ? `<span class="tag ok">พบข้อมูล</span>`
         : `<span class="tag warn">ไม่พบผู้ใช้ (${log.fingerprint_id ?? ""})</span>`;
 
+      const hr = (log.heart_rate ?? null) !== null ? log.heart_rate : "-";
+
       return `<tr>
         <td>${log.scanned_at ?? "-"}</td>
         <td>${log.student_id ?? "-"}</td>
         <td>${log.full_name ?? "-"}</td>
         <td>${log.department ?? "-"}</td>
+        <td>${hr}</td>
         <td>${statusHtml}</td>
       </tr>`;
     }).join("");

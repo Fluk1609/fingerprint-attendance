@@ -15,6 +15,7 @@
         <th>รหัสนักศึกษา/บุคลากร</th>
         <th>ชื่อ-นามสกุล</th>
         <th>หน่วยงาน/สาขา</th>
+        <th>ชีพจร (bpm)</th>
         <th>สถานะ</th>
       </tr>
     </thead>
@@ -25,6 +26,7 @@
         <td>{{ log.student_id or '-' }}</td>
         <td>{{ log.full_name or '-' }}</td>
         <td>{{ log.department or '-' }}</td>
+        <td>{{ log.heart_rate if log.heart_rate is not none else '-' }}</td>
         <td>
           {% if log.status == 'matched' %}
             <span class="tag ok">พบข้อมูล</span>
@@ -34,7 +36,7 @@
         </td>
       </tr>
       {% else %}
-      <tr><td colspan="5" class="empty">ยังไม่มีรายการสแกน</td></tr>
+      <tr><td colspan="6" class="empty">ยังไม่มีรายการสแกน</td></tr>
       {% endfor %}
     </tbody>
   </table>

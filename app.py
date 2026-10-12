@@ -92,6 +92,10 @@ def api_scan():
         "fingerprint_id"
     )
 
+    heart_rate = payload.get(
+        "heart_rate"
+    )  # ไม่บังคับ: มีเฉพาะเครื่องที่ต่อเซนเซอร์วัดชีพจรไว้
+
     scanned_at = (
         payload.get("scanned_at")
         or datetime.now().isoformat(
@@ -123,6 +127,7 @@ def api_scan():
             user["id"],
             "matched",
             scanned_at,
+            heart_rate,
         )
 
         return jsonify({
@@ -131,6 +136,7 @@ def api_scan():
             "full_name": user["full_name"],
             "department": user["department"],
             "scanned_at": scanned_at,
+            "heart_rate": heart_rate,
         })
 
     # -----------------------------------------------------
@@ -142,11 +148,13 @@ def api_scan():
         None,
         "unmatched",
         scanned_at,
+        heart_rate,
     )
 
     return jsonify({
         "status": "unmatched",
         "scanned_at": scanned_at,
+        "heart_rate": heart_rate,
     }), 200
 
 
@@ -186,7 +194,7 @@ def users_add():
     fingerprint_id = request.form.get(
         "fingerprint_id",
         ""
-    ).strip()
+    ).strip() or None  # ไม่บังคับ: ลงทะเบียนนิ้วจริงทำผ่าน zkteco_enroll.py แทน
 
     # -----------------------------------------------------
     # Validate
@@ -195,12 +203,10 @@ def users_add():
     if not (
         student_id
         and full_name
-        and fingerprint_id
     ):
 
         flash(
-            "กรุณากรอกรหัส, ชื่อ-นามสกุล "
-            "และรหัสลายนิ้วมือให้ครบ",
+            "กรุณากรอกรหัสและชื่อ-นามสกุลให้ครบ",
             "error",
         )
 
@@ -345,6 +351,10 @@ def reports_page():
 
                 "count": 0,
 
+                "hr_sum": 0,
+
+                "hr_count": 0,
+
                 "first": row["scanned_at"],
 
                 "last": row["scanned_at"],
@@ -352,8 +362,18 @@ def reports_page():
 
         summary[key]["count"] += 1
 
+        if row.get("heart_rate") is not None:
+            summary[key]["hr_sum"] += row["heart_rate"]
+            summary[key]["hr_count"] += 1
+
         summary[key]["last"] = (
             row["scanned_at"]
+        )
+
+    for info in summary.values():
+        info["avg_hr"] = (
+            round(info["hr_sum"] / info["hr_count"])
+            if info["hr_count"] else None
         )
 
     return render_template(

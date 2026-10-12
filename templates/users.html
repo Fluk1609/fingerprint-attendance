@@ -7,7 +7,20 @@
 </div>
 
 <div class="card">
-  <h2>เพิ่มผู้ใช้ใหม่ / ลงทะเบียนลายนิ้วมือ</h2>
+  <h2>วิธีเพิ่มผู้ใช้ใหม่ (เครื่องสแกน ZKTeco)</h2>
+  <p class="hint">
+    เครื่อง ZKTeco ต้องให้ผู้ใช้ <strong>วางนิ้วจริงบนเครื่องสแกน 3 ครั้ง</strong> เพื่อเก็บเทมเพลตลายนิ้วมือ
+    จึงไม่สามารถเพิ่มผ่านฟอร์มเว็บตรงๆ ได้ ให้ไปที่เครื่องที่ต่อเครื่องสแกนอยู่ แล้วรันคำสั่งนี้แทน:
+  </p>
+  <pre><code>python zkteco_enroll.py</code></pre>
+  <p class="hint">
+    สคริปต์จะถามรหัสนักศึกษา/บุคลากร ชื่อ-นามสกุล และหน่วยงาน จากนั้นให้วางนิ้ว 3 ครั้ง
+    แล้วบันทึกเข้าระบบอัตโนมัติ — ผู้ใช้ใหม่จะมาปรากฏในตารางด้านล่างทันที
+  </p>
+</div>
+
+<div class="card">
+  <h2>เพิ่มผู้ใช้แบบกรอกเอง (ไม่ผูกลายนิ้วมือ / แก้ไขรหัสภายหลัง)</h2>
   <form method="POST" action="{{ url_for('users_add') }}" class="form-grid">
     <div class="field">
       <label>รหัสนักศึกษา/บุคลากร</label>
@@ -22,16 +35,16 @@
       <input type="text" name="department">
     </div>
     <div class="field">
-      <label>รหัสลายนิ้วมือ (จาก SDK เครื่องสแกน)</label>
-      <input type="text" name="fingerprint_id" required placeholder="เช่น รหัสที่ได้ตอนลงทะเบียนนิ้วกับเครื่อง">
+      <label>รหัสลายนิ้วมือ (ไม่บังคับ)</label>
+      <input type="text" name="fingerprint_id" placeholder="เว้นว่างได้ถ้าจะลงทะเบียนนิ้วทีหลังด้วย zkteco_enroll.py">
     </div>
     <div class="field submit">
       <button type="submit">บันทึกผู้ใช้</button>
     </div>
   </form>
   <p class="hint">
-    หมายเหตุ: การ "สแกนนิ้วเพื่อลงทะเบียน" (enrollment) ต้องทำผ่านโปรแกรม/SDK ของตัวเครื่องสแกนก่อน
-    เพื่อให้ได้ค่ารหัสลายนิ้วมือ (fingerprint_id) แล้วนำรหัสนั้นมากรอกในฟอร์มนี้เพื่อผูกกับข้อมูลบุคคล
+    ฟอร์มนี้เหมาะสำหรับเพิ่มข้อมูลบุคคลไว้ก่อน หรือแก้ไข/ย้ายรหัสลายนิ้วมือในกรณีพิเศษ
+    แต่การ "ลงทะเบียนลายนิ้วมือจริง" ต้องทำผ่าน <code>zkteco_enroll.py</code> เท่านั้น
   </p>
 </div>
 
@@ -54,7 +67,7 @@
         <td>{{ u.student_id }}</td>
         <td>{{ u.full_name }}</td>
         <td>{{ u.department or '-' }}</td>
-        <td><code>{{ u.fingerprint_id }}</code></td>
+        <td>{% if u.fingerprint_id %}<code>{{ u.fingerprint_id }}</code>{% if u.fingerprint_template %} <span class="tag ok">มีลายนิ้วมือแล้ว</span>{% endif %}{% else %}<span class="tag warn">ยังไม่ได้ลงทะเบียนนิ้ว</span>{% endif %}</td>
         <td>{{ u.created_at }}</td>
         <td>
           <form method="POST" action="{{ url_for('users_delete', user_id=u.id) }}" onsubmit="return confirm('ยืนยันลบผู้ใช้นี้?');">

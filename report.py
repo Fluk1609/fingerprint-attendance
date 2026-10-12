@@ -51,7 +51,7 @@ def build_excel_report(logs, start_date, end_date):
     ws1["A1"].font = TITLE_FONT
     ws1["A1"].alignment = Alignment(horizontal="left")
 
-    headers = ["ลำดับ", "รหัสนักศึกษา/บุคลากร", "ชื่อ-นามสกุล", "หน่วยงาน/สาขา", "จำนวนครั้งที่สแกน", "สแกนล่าสุด"]
+    headers = ["ลำดับ", "รหัสนักศึกษา/บุคลากร", "ชื่อ-นามสกุล", "หน่วยงาน/สาขา", "จำนวนครั้งที่สแกน", "ชีพจรเฉลี่ย (bpm)", "สแกนล่าสุด"]
     header_row = 3
     for col, text in enumerate(headers, start=1):
         ws1.cell(row=header_row, column=col, value=text)
@@ -66,30 +66,36 @@ def build_excel_report(logs, start_date, end_date):
                 "full_name": row["full_name"] or "-",
                 "department": row["department"] or "-",
                 "count": 0,
+                "hr_sum": 0,
+                "hr_count": 0,
                 "last": row["scanned_at"],
             }
         summary[key]["count"] += 1
+        if row.get("heart_rate") is not None:
+            summary[key]["hr_sum"] += row["heart_rate"]
+            summary[key]["hr_count"] += 1
         if row["scanned_at"] > summary[key]["last"]:
             summary[key]["last"] = row["scanned_at"]
 
     r = header_row + 1
     for idx, (student_id, info) in enumerate(sorted(summary.items()), start=1):
-        values = [idx, student_id, info["full_name"], info["department"], info["count"], info["last"]]
+        avg_hr = round(info["hr_sum"] / info["hr_count"]) if info["hr_count"] else "-"
+        values = [idx, student_id, info["full_name"], info["department"], info["count"], avg_hr, info["last"]]
         for col, val in enumerate(values, start=1):
             cell = ws1.cell(row=r, column=col, value=val)
             cell.font = BODY_FONT
             cell.border = THIN_BORDER
-            cell.alignment = Alignment(horizontal="center" if col in (1, 5) else "left")
+            cell.alignment = Alignment(horizontal="center" if col in (1, 5, 6) else "left")
         r += 1
 
     if not summary:
         ws1.cell(row=r, column=1, value="ไม่มีข้อมูลในช่วงวันที่ที่เลือก").font = BODY_FONT
 
-    _autofit_columns(ws1, [8, 22, 28, 22, 18, 22])
+    _autofit_columns(ws1, [8, 22, 28, 22, 18, 18, 22])
 
     # ---------------- ชีต 2: รายละเอียดทั้งหมด ----------------
     ws2 = wb.create_sheet("รายละเอียดทั้งหมด")
-    headers2 = ["ลำดับ", "วันเวลาที่สแกน", "รหัสนักศึกษา/บุคลากร", "ชื่อ-นามสกุล", "หน่วยงาน/สาขา", "สถานะ"]
+    headers2 = ["ลำดับ", "วันเวลาที่สแกน", "รหัสนักศึกษา/บุคลากร", "ชื่อ-นามสกุล", "หน่วยงาน/สาขา", "ชีพจร (bpm)", "สถานะ"]
     for col, text in enumerate(headers2, start=1):
         ws2.cell(row=1, column=col, value=text)
     _style_header_row(ws2, 1, len(headers2))
@@ -103,18 +109,19 @@ def build_excel_report(logs, start_date, end_date):
             row["student_id"] or "-",
             row["full_name"] or "-",
             row["department"] or "-",
+            row["heart_rate"] if row.get("heart_rate") is not None else "-",
             status_th.get(row["status"], row["status"]),
         ]
         for col, val in enumerate(values, start=1):
             cell = ws2.cell(row=idx + 1, column=col, value=val)
             cell.font = BODY_FONT
             cell.border = THIN_BORDER
-            cell.alignment = Alignment(horizontal="center" if col in (1, 6) else "left")
+            cell.alignment = Alignment(horizontal="center" if col in (1, 6, 7) else "left")
 
     if not logs:
         ws2.cell(row=2, column=1, value="ไม่มีข้อมูลในช่วงวันที่ที่เลือก").font = BODY_FONT
 
-    _autofit_columns(ws2, [8, 20, 22, 28, 22, 20])
+    _autofit_columns(ws2, [8, 20, 22, 28, 22, 14, 20])
 
     buffer = io.BytesIO()
     wb.save(buffer)
