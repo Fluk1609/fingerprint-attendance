@@ -1,19 +1,38 @@
-"""
-report.py
----------
-สร้างไฟล์ Excel (.xlsx) สรุปผลการเช็คชื่อด้วยลายนิ้วมือ จาก log ที่ดึงมาจากฐานข้อมูล
-
-โครงสร้างไฟล์:
-  ชีต "สรุปรายบุคคล"   - จำนวนครั้งที่สแกนของแต่ละคนในช่วงวันที่เลือก
-  ชีต "รายละเอียดทั้งหมด" - รายการสแกนทุกครั้ง (raw log) เรียงตามเวลา
-"""
-
 import io
+from datetime import datetime, timezone, timedelta
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
-HEADER_FILL = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
+
+def format_excel_datetime(value):
+    if not value:
+        return "-"
+
+    try:
+        if isinstance(value, str):
+            value = datetime.fromisoformat(
+                value.replace("Z", "+00:00")
+            )
+
+        # ถ้าไม่มี timezone ให้ถือว่าเป็นเวลาไทยอยู่แล้ว
+        if value.tzinfo is None:
+            value = value.replace(
+                tzinfo=timezone(timedelta(hours=7))
+            )
+        else:
+            # แปลงเวลาเป็น UTC+7
+            value = value.astimezone(
+                timezone(timedelta(hours=7))
+            )
+
+        return value.strftime("%d/%m/%Y : %H:%M")
+
+    except (ValueError, TypeError):
+        return str(value)
+
+
+HEADER_FILL = PatternFill(start_color="7031A0", end_color="7031A0", fill_type="solid")
 HEADER_FONT = Font(name="Arial", bold=True, color="FFFFFF", size=11)
 BODY_FONT = Font(name="Arial", size=10)
 TITLE_FONT = Font(name="Arial", bold=True, size=14)
@@ -74,7 +93,14 @@ def build_excel_report(logs, start_date, end_date):
 
     r = header_row + 1
     for idx, (student_id, info) in enumerate(sorted(summary.items()), start=1):
-        values = [idx, student_id, info["full_name"], info["department"], info["count"], info["last"]]
+        values = [
+    idx,
+    student_id,
+    info["full_name"],
+    info["department"],
+    info["count"],
+    format_excel_datetime(info["last"]),
+]
         for col, val in enumerate(values, start=1):
             cell = ws1.cell(row=r, column=col, value=val)
             cell.font = BODY_FONT
@@ -99,7 +125,7 @@ def build_excel_report(logs, start_date, end_date):
     for idx, row in enumerate(logs, start=1):
         values = [
             idx,
-            row["scanned_at"],
+            format_excel_datetime(row["scanned_at"]),
             row["student_id"] or "-",
             row["full_name"] or "-",
             row["department"] or "-",

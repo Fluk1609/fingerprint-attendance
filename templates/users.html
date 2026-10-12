@@ -93,7 +93,7 @@
         <td>{{ u.full_name }}</td>
         <td>{{ u.department or '-' }}</td>
         <td><code>{{ u.fingerprint_id }}</code></td>
-        <td>{{ u.created_at }}</td>
+        <td>{{ u.created_at | datetime_format }}</td>
         <td>
           <button type="button" class="enroll-user-btn" data-fingerprint-id="{{ u.fingerprint_id }}"
             data-full-name="{{ u.full_name }}">

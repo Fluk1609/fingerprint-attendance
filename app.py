@@ -38,11 +38,13 @@ from flask import (
 
 from asgiref.wsgi import WsgiToAsgi
 
-from datetime import datetime, date, timedelta
 import io
 
 import database as db
 from report import build_excel_report
+from datetime import datetime, date, timedelta, timezone
+
+THAI_TZ = timezone(timedelta(hours=7))
 
 
 # =========================================================
@@ -52,6 +54,46 @@ from report import build_excel_report
 app = Flask(__name__)
 
 app.secret_key = "change-this-secret-key"
+
+@app.template_filter("datetime_format_th")
+def datetime_format_th(value):
+    if not value:
+        return "-"
+
+    try:
+        if isinstance(value, str):
+            value = datetime.fromisoformat(
+                value.replace("Z", "+00:00")
+            )
+
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+
+        value = value.astimezone(
+            timezone(timedelta(hours=7))
+        )
+
+        return value.strftime("%d/%m/%Y : %H:%M")
+
+    except (ValueError, TypeError):
+        return str(value)
+
+
+@app.template_filter("datetime_format")
+def datetime_format(value):
+    if not value:
+        return "-"
+
+    try:
+        if isinstance(value, str):
+            value = datetime.fromisoformat(
+                value.replace("Z", "+00:00")
+            )
+
+        return value.strftime("%d/%m/%Y : %H:%M")
+
+    except (ValueError, TypeError):
+        return str(value)
 
 TEMPLATE_FILE = Path(__file__).resolve().parent / "fingerprint_templates.json"
 
@@ -256,11 +298,16 @@ def users_add():
 
     try:
 
+        created_at = datetime.now(
+            timezone(timedelta(hours=7))
+        ).isoformat(timespec="seconds")
+
         db.add_user(
             student_id,
             full_name,
             department,
             fingerprint_id,
+            created_at=created_at,
         )
 
         flash(
@@ -269,18 +316,13 @@ def users_add():
         )
 
     except Exception as exc:
-
-        print(
-            f"[ERROR] เพิ่มผู้ใช้ไม่สำเร็จ: {exc}"
-        )
+        print(f"[ERROR] เพิ่มผู้ใช้ไม่สำเร็จ: {exc}")
 
         flash(
             f"เพิ่มผู้ใช้ไม่สำเร็จ: "
-            f"รหัสนักศึกษาหรือรหัสลายนิ้วมือซ้ำ "
-            f"({exc})",
+            f"รหัสนักศึกษาหรือรหัสลายนิ้วมือซ้ำ ({exc})",
             "error",
         )
-
     return redirect(
         url_for("users_page")
     )

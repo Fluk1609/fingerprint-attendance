@@ -121,9 +121,7 @@
             {{ info.count }}
           </td>
 
-          <td>
-            {{ info.last }}
-          </td>
+          <td>{{ info.last | datetime_format_th }}</td>
         </tr>
 
         {% else %}
@@ -173,9 +171,7 @@
 
         <tr>
 
-          <td>
-            {{ log.scanned_at }}
-          </td>
+          <td>{{ log.scanned_at | datetime_format_th }}</td>
 
           <td>
             {{ log.student_id or '-' }}
