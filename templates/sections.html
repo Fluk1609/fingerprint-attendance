@@ -1,0 +1,56 @@
+ {% extends "base.html" %}
+{% block title %}Master Section{% endblock %}
+{% block content %}
+
+<div class="page-header">
+    <h1>Master Section</h1>
+    <p class="hint">จัดการกลุ่มเรียนที่ใช้ในระบบ</p>
+</div>
+
+<div class="card">
+    <h2>เพิ่ม Section</h2>
+    <form method="POST" class="form-grid">
+        <div class="field">
+            <label>ชื่อ Section</label>
+            <input name="name" required maxlength="100"
+                   placeholder="เช่น Section 1">
+        </div>
+        <div class="field submit">
+            <button type="submit">เพิ่ม Section</button>
+        </div>
+    </form>
+</div>
+
+<div class="card">
+    <h2>รายการ Section</h2>
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>ชื่อ Section</th>
+                <th>จัดการ</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for section in sections %}
+            <tr>
+                <td>{{ section.id }}</td>
+                <td>{{ section.name }}</td>
+                <td>
+                    <form method="POST"
+                          action="{{ url_for('sections_delete', section_id=section.id) }}"
+                          onsubmit="return confirm('ยืนยันลบ {{ section.name }} หรือไม่?')">
+                        <button type="submit" class="danger">ลบ</button>
+                    </form>
+                </td>
+            </tr>
+            {% else %}
+            <tr>
+                <td colspan="3" class="empty">ยังไม่มีข้อมูล Section</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+{% endblock %}

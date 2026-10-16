@@ -14,15 +14,13 @@ Project: fingerprint-attendance
 
 import argparse
 import base64
-import json
-import os
 import time
 import traceback
 from datetime import datetime
-from pathlib import Path
 
 import requests
 from pyzkfp import ZKFP2
+import database as db
 
 
 # =========================
@@ -33,7 +31,6 @@ API_URL = "http://127.0.0.1:5000/api/scan"
 
 ENROLL_NEXT_URL = "http://127.0.0.1:5000/api/scanner/enrollment/next"
 ENROLL_RESULT_URL = "http://127.0.0.1:5000/api/scanner/enrollment/result"
-TEMPLATE_FILE = "fingerprint_templates.json"
 
 CAPTURE_DELAY = 0.25
 CAPTURE_SIZE = 2048
@@ -113,71 +110,44 @@ class ZK9500Scanner:
 
 
 # =========================
-# Local fingerprint storage
+# Supabase fingerprint storage
 # =========================
 
 def load_templates():
-    """Load registered fingerprint templates from JSON."""
-
-    if not TEMPLATE_FILE.exists():
-        return {}
-
-    try:
-        with TEMPLATE_FILE.open("r", encoding="utf-8") as file:
-            data = json.load(file)
-
-        if not isinstance(data, dict):
-            raise ValueError(
-                "fingerprint_templates.json ต้องเป็น JSON object"
-            )
-
-        return data
-
-    except (OSError, json.JSONDecodeError, ValueError) as exc:
-        raise RuntimeError(
-            f"อ่านไฟล์ template ไม่สำเร็จ: {exc}"
-        ) from exc
-
-
-def save_templates(templates):
-    """Save templates to JSON."""
-
-    with TEMPLATE_FILE.open("w", encoding="utf-8") as file:
-        json.dump(
-            templates,
-            file,
-            ensure_ascii=False,
-            indent=2
-        )
+    """Load fingerprint templates from Supabase; values should be bytes."""
+    return db.get_all_fingerprint_templates()
 
 
 def load_templates_into_sdk(scanner, templates):
-    """Load all registered templates into the SDK memory."""
-
+    """Load registered templates from Supabase into SDK memory."""
     loaded = 0
 
-    for fingerprint_id, encoded in templates.items():
+    for fingerprint_id, template in templates.items():
         try:
             fid = int(fingerprint_id)
-            template = base64.b64decode(
-                encoded,
-                validate=True
-            )
 
-            scanner.zk.DBAdd(fid, template)
+            # database.py normally returns bytes; support Base64 strings too.
+            if isinstance(template, str):
+                template = base64.b64decode(template, validate=True)
+
+            # Avoid duplicate IDs when refreshing SDK memory.
+            try:
+                scanner.zk.DBDel(fid)
+            except Exception:
+                pass
+
+            scanner.zk.DBAdd(fid, bytes(template))
             loaded += 1
 
         except Exception as exc:
             print(
-                f"[WARN] โหลด template รหัส "
-                f"{fingerprint_id} ไม่สำเร็จ: {exc}"
+                f"[WARN] โหลด Template รหัส {fingerprint_id} ไม่สำเร็จ: {exc}"
             )
 
     print(
-        f"โหลด template เข้า SDK แล้ว "
+        f"โหลด Template จาก Supabase เข้า SDK แล้ว "
         f"{loaded}/{len(templates)} รายการ"
     )
-
     return loaded
 
 
@@ -186,14 +156,13 @@ def load_templates_into_sdk(scanner, templates):
 # =========================
 
 def enroll(scanner):
-    """Enroll the same finger three times."""
-
-    templates = load_templates()
+    """Enroll the same finger three times and save template to Supabase."""
 
     fingerprint_id = input(
         "กำหนด fingerprint_id เช่น 1001: "
     ).strip()
 
+    # ตรวจสอบว่า ID เป็นตัวเลข
     if not fingerprint_id.isdigit():
         print("fingerprint_id ต้องเป็นตัวเลข เช่น 1001")
         return
@@ -204,14 +173,24 @@ def enroll(scanner):
         print("fingerprint_id ต้องไม่ติดลบ")
         return
 
-    if fingerprint_id in templates:
+    # ตรวจสอบ Template จาก Supabase
+    try:
+        has_template = db.has_fingerprint_template(fingerprint_id)
+    except Exception as exc:
+        print(f"[ERROR] ตรวจสอบ Template ใน Supabase ไม่สำเร็จ: {exc}")
+        return
+
+    # ถ้ามี Template อยู่แล้ว ให้ถามก่อนว่าจะลงทะเบียนทับหรือไม่
+    if has_template:
         confirm = input(
-            "รหัสนี้มี template แล้ว ต้องการลงทะเบียนทับหรือไม่? (y/N): "
+            "รหัสนี้มี Template แล้ว ต้องการลงทะเบียนทับหรือไม่? (y/N): "
         ).strip().lower()
 
         if confirm != "y":
             print("ยกเลิกการลงทะเบียน")
             return
+
+    # อ่านลายนิ้วมือเดิม 3 ครั้ง
     captures = []
 
     for index in range(3):
@@ -222,54 +201,80 @@ def enroll(scanner):
 
         print("กำลังอ่านลายนิ้วมือ...")
 
-        template = scanner.capture()
-
-        if not template:
-            print("ไม่พบ template กรุณาลองใหม่")
+        try:
+            template = scanner.capture()
+        except Exception as exc:
+            print(f"[ERROR] อ่านลายนิ้วมือไม่สำเร็จ: {exc}")
             return
 
-        captures.append(template)
+        if not template:
+            print("ไม่พบ Template กรุณาลองใหม่")
+            return
+
+        captures.append(bytes(template))
 
         print("อ่านลายนิ้วมือสำเร็จ กรุณานำนิ้วออก")
+
         time.sleep(1)
 
-    print("กำลังรวม template...")
+    # รวม Template จากการอ่านทั้ง 3 ครั้ง
+    print("กำลังรวม Template...")
 
-    merged, merged_length = scanner.zk.DBMerge(
-        captures[0],
-        captures[1],
-        captures[2]
-    )
+    try:
+        merged, merged_length = scanner.zk.DBMerge(
+            captures[0],
+            captures[1],
+            captures[2]
+        )
+    except Exception as exc:
+        print(f"[ERROR] รวม Template ไม่สำเร็จ: {exc}")
+        return
 
     if not merged:
-        print("รวม template ไม่สำเร็จ กรุณาลงทะเบียนใหม่")
+        print("รวม Template ไม่สำเร็จ กรุณาลงทะเบียนใหม่")
         return
 
     merged = bytes(merged)
 
     if merged_length and len(merged) != int(merged_length):
         print(
-            "คำเตือน: ความยาว template ไม่ตรงกับค่าที่ SDK คืนมา"
+            "คำเตือน: ความยาว Template ไม่ตรงกับค่าที่ SDK คืนมา"
         )
 
-    if fingerprint_id in templates:
-        try:
-            scanner.zk.DBDel(fid)
-        except Exception as exc:
-            print(
-                f"[WARN] ลบ template เก่าใน SDK ไม่สำเร็จ: {exc}"
-            )
+    # บันทึก Template ลง Supabase
+    try:
+        db.update_fingerprint_template(
+            fingerprint_id,
+            merged
+        )
+    except Exception as exc:
+        print(f"[ERROR] บันทึก Template ลง Supabase ไม่สำเร็จ: {exc}")
+        return
 
-    scanner.zk.DBAdd(fid, merged)
-    templates[fingerprint_id] = base64.b64encode(
-        merged
-    ).decode("ascii")
+    # อัปเดต Template ใน SDK
+    try:
+        if has_template:
+            try:
+                scanner.zk.DBDel(fid)
+            except Exception as exc:
+                print(f"[WARN] ลบ Template เดิมใน SDK ไม่สำเร็จ: {exc}")
+                print("Template ถูกบันทึกใน Supabase แล้ว กรุณาเริ่ม Scanner ใหม่")
+                return
 
-    save_templates(templates)
+        scanner.zk.DBAdd(fid, merged)
 
-    print(f"ลงทะเบียนลายนิ้วมือรหัส {fingerprint_id} สำเร็จ")
-    print("เพิ่มหรือแก้ไขผู้ใช้ในหน้าเว็บให้ใช้ fingerprint_id เดียวกัน")
+    except Exception as exc:
+        print(
+            "[WARN] บันทึกลง Supabase สำเร็จ "
+            f"แต่เพิ่ม Template เข้า SDK ไม่สำเร็จ: {exc}"
+        )
+        print("กรุณาโหลด Template ใหม่หรือเริ่ม Scanner ใหม่")
+        return
 
+    print(
+        f"[SUCCESS] ลงทะเบียนลายนิ้วมือรหัส {fingerprint_id} สำเร็จ"
+    )
+    print("บันทึก Template ลง Supabase เรียบร้อย")
 
 def send_scan(fingerprint_id):
     """Send a recognized fingerprint ID to the Flask API."""
@@ -345,38 +350,44 @@ def send_enrollment_result(job_id, success, message):
 
 
 def process_enrollment(scanner, job):
+    """Process enrollment requested by the Flask app and save to Supabase."""
     fingerprint_id = str(job["fingerprint_id"])
     job_id = job["job_id"]
+    replace_existing = job.get("replace_existing") is True
 
     try:
         if not fingerprint_id.isdigit():
             raise ValueError("รหัสลายนิ้วมือต้องเป็นตัวเลข")
 
         fid = int(fingerprint_id)
-        templates = load_templates()
+        has_template = db.has_fingerprint_template(fingerprint_id)
 
-        if fingerprint_id in templates:
-            raise ValueError("รหัสนี้มี Template อยู่แล้ว")
+        if has_template and not replace_existing:
+            raise ValueError(
+                "รหัสนี้มี Template อยู่แล้ว กรุณายืนยันการเปลี่ยนลายนิ้วมือก่อน"
+            )
 
-        print(f"\nเริ่มลงทะเบียนรหัส {fingerprint_id}")
+        old_template = (
+            db.get_fingerprint_template(fingerprint_id)
+            if has_template else None
+        )
+
+        print(f"\\nเริ่มลงทะเบียนรหัส {fingerprint_id}")
         captures = []
 
         for index in range(3):
             print(f"วางนิ้วครั้งที่ {index + 1}/3")
-
             template = scanner.capture()
 
             if not template:
                 raise RuntimeError("อ่านลายนิ้วมือไม่สำเร็จ")
 
-            captures.append(template)
+            captures.append(bytes(template))
             print("อ่านสำเร็จ กรุณานำนิ้วออก")
             time.sleep(1)
 
         merged, merged_length = scanner.zk.DBMerge(
-            captures[0],
-            captures[1],
-            captures[2]
+            captures[0], captures[1], captures[2]
         )
 
         if not merged:
@@ -384,31 +395,46 @@ def process_enrollment(scanner, job):
 
         merged = bytes(merged)
 
-        # บันทึก Template เข้า SDK และไฟล์ในเครื่อง
-        scanner.zk.DBAdd(fid, merged)
+        if merged_length and len(merged) != int(merged_length):
+            print("[WARN] ความยาว Template ไม่ตรงกับค่าที่ SDK คืนมา")
 
-        templates[fingerprint_id] = base64.b64encode(
-            merged
-        ).decode("ascii")
+        # Update SDK first, then persist. Restore the old SDK template if
+        # the Supabase update fails, so the two stores stay consistent.
+        sdk_changed = False
+        try:
+            if has_template:
+                scanner.zk.DBDel(fid)
 
-        save_templates(templates)
+            scanner.zk.DBAdd(fid, merged)
+            sdk_changed = True
+
+            db.update_fingerprint_template(fingerprint_id, merged)
+
+        except Exception:
+            if sdk_changed:
+                try:
+                    scanner.zk.DBDel(fid)
+                except Exception:
+                    pass
+
+            if has_template and old_template:
+                try:
+                    scanner.zk.DBAdd(fid, bytes(old_template))
+                except Exception as restore_exc:
+                    print(
+                        "[CRITICAL] คืน Template เดิมเข้า SDK ไม่สำเร็จ: "
+                        f"{restore_exc}"
+                    )
+            raise
 
         send_enrollment_result(
-            job_id,
-            True,
-            "ลงทะเบียนลายนิ้วมือสำเร็จ"
+            job_id, True, "ลงทะเบียนลายนิ้วมือสำเร็จ"
         )
-
         print(f"[ENROLL] ลงทะเบียน {fingerprint_id} สำเร็จ")
 
     except Exception as exc:
         print(f"[ENROLL ERROR] {exc}")
-
-        send_enrollment_result(
-            job_id,
-            False,
-            str(exc)
-        )
+        send_enrollment_result(job_id, False, str(exc))
 
 
 def scan_loop(scanner):
@@ -496,24 +522,15 @@ def scan_loop(scanner):
             time.sleep(CAPTURE_DELAY)
 
 def delete_fingerprint_template(fingerprint_id):
-    if not os.path.exists(TEMPLATE_FILE):
-        return
+    """Clear a user's stored fingerprint template in Supabase."""
+    response = (
+        db.supabase.table("users")
+        .update({"fingerprint_template": None})
+        .eq("fingerprint_id", str(fingerprint_id))
+        .execute()
+    )
+    return response.data
 
-    with open(TEMPLATE_FILE, "r", encoding="utf-8") as f:
-        templates = json.load(f)
-
-    fingerprint_id = str(fingerprint_id)
-
-    if fingerprint_id in templates:
-        del templates[fingerprint_id]
-
-        with open(TEMPLATE_FILE, "w", encoding="utf-8") as f:
-            json.dump(
-                templates,
-                f,
-                ensure_ascii=False,
-                indent=2
-            )
 
 def main():
     parser = argparse.ArgumentParser(

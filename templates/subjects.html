@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}Master Subject{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Master Subject</h1>
+  <p class="hint">กำหนดรายวิชา Section เวลาเรียน และเกณฑ์การมาสาย</p>
+</div>
+
+<div class="card">
+  <h2>เพิ่มรายวิชา</h2>
+  {% if not sections %}
+  <p class="flash error">ยังไม่มี Section กรุณาเพิ่ม Section ในเมนู Master Section ก่อน</p>
+  {% endif %}
+  <form method="POST" class="form-grid">
+    <div class="field">
+      <label>รหัสวิชา (ไม่บังคับ)</label>
+      <input name="code" placeholder="เช่น EE101">
+    </div>
+    <div class="field">
+      <label>ชื่อวิชา</label>
+      <input name="name" required placeholder="เช่น วงจรไฟฟ้า">
+    </div>
+    <div class="field">
+      <label>Section</label>
+      <select name="section_id" required>
+        <option value="">-- เลือก Section --</option>
+        {% for section in sections %}
+        <option value="{{ section.id }}">{{ section.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="field">
+      <label>เวลาเริ่มเรียน</label>
+      <input type="time" name="start_time" required>
+    </div>
+    <div class="field">
+      <label>เวลาเลิกเรียน</label>
+      <input type="time" name="end_time" required>
+    </div>
+    <div class="field">
+      <label>อนุโลมก่อนถือว่าสาย (นาที)</label>
+      <input type="number" name="late_after_minutes" min="0" step="1" value="0" required>
+      <small class="hint">ตัวอย่าง: เริ่ม 09:00 และกำหนด 10 นาที จะถือว่าสายหลัง 09:10</small>
+    </div>
+    <div class="field submit">
+      <button type="submit" {% if not sections %}disabled{% endif %}>เพิ่มวิชา</button>
+    </div>
+  </form>
+</div>
+
+<div class="card">
+  <h2>รายการวิชา</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>#</th><th>รหัสวิชา</th><th>ชื่อวิชา</th><th>Section</th>
+        <th>เวลาเริ่ม</th><th>เวลาเลิก</th><th>นาทีผ่อนผัน</th><th>จัดการ</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for subject in subjects %}
+      <tr>
+        <td>{{ loop.index }}</td>
+        <td>{{ subject.code or '-' }}</td>
+        <td>{{ subject.name }}</td>
+        <td>{{ subject.sections.name if subject.sections else '-' }}</td>
+        <td>{{ (subject.start_time|string)[:5] if subject.start_time else '-' }}</td>
+        <td>{{ (subject.end_time|string)[:5] if subject.end_time else '-' }}</td>
+        <td>{{ subject.late_after_minutes if subject.late_after_minutes is not none else 0 }}</td>
+        <td>
+          <form method="POST" action="{{ url_for('subjects_delete', subject_id=subject.id) }}" onsubmit="return confirm('ยืนยันลบวิชานี้?')">
+            <button type="submit" class="danger">ลบ</button>
+          </form>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="8">ยังไม่มีข้อมูลรายวิชา</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

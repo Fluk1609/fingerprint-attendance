@@ -20,9 +20,7 @@ from openpyxl import load_workbook
 import threading
 import queue
 import base64
-import json
 import time
-from pathlib import Path
 from pyzkfp import ZKFP2
 import uuid
 from flask import (
@@ -95,29 +93,16 @@ def datetime_format(value):
     except (ValueError, TypeError):
         return str(value)
 
-TEMPLATE_FILE = Path(__file__).resolve().parent / "fingerprint_templates.json"
-
-
 def delete_fingerprint_template(fingerprint_id):
-    if not TEMPLATE_FILE.exists():
-        return
-
-    with open(TEMPLATE_FILE, "r", encoding="utf-8") as f:
-        templates = json.load(f)
-
-    fingerprint_id = str(fingerprint_id)
-
-    if fingerprint_id in templates:
-        del templates[fingerprint_id]
-
-        temp_file = TEMPLATE_FILE.with_suffix(".tmp")
-        temp_file.write_text(
-            json.dumps(templates, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        temp_file.replace(TEMPLATE_FILE)
-
-        print(f"[SCANNER] ลบ Template รหัส {fingerprint_id} จาก JSON แล้ว")
+    """ล้าง Template ใน Supabase (ไม่ใช้ fingerprint_templates.json)"""
+    try:
+        db.supabase.table("users").update(
+            {"fingerprint_template": None}
+        ).eq("fingerprint_id", str(fingerprint_id)).execute()
+        print(f"[SCANNER] ล้าง Template รหัส {fingerprint_id} จาก Supabase แล้ว")
+    except Exception as exc:
+        print(f"[SCANNER] ล้าง Template ใน Supabase ไม่สำเร็จ: {exc}")
+        raise
 
 
 
@@ -137,6 +122,10 @@ scanner_lock = threading.Lock()
 
 enrollment_jobs = {}
 enrollment_lock = threading.Lock()
+
+
+active_subject_id = None
+active_subject_lock = threading.Lock()
 # =========================================================
 # Dashboard
 # =========================================================
@@ -144,11 +133,60 @@ enrollment_lock = threading.Lock()
 @app.route("/")
 def dashboard():
     logs = db.get_recent_logs(limit=50)
+    subjects = _master_list("subjects", "name")
+
+    with active_subject_lock:
+        selected_subject_id = active_subject_id
 
     return render_template(
         "index.html",
         logs=logs,
+        subjects=subjects,
+        selected_subject_id=selected_subject_id,
     )
+
+
+@app.route("/attendance/subject", methods=["POST"])
+def set_active_subject():
+    """กำหนดรายวิชาที่กำลังเช็กชื่อ"""
+    global active_subject_id
+    subject_id_raw = (request.form.get("subject_id") or "").strip()
+
+    if not subject_id_raw:
+        with active_subject_lock:
+            active_subject_id = None
+        print("[SUBJECT DEBUG] ยกเลิกรายวิชาแล้ว: active_subject_id=None")
+        flash("ยกเลิกรายวิชาที่กำลังเช็กชื่อแล้ว", "success")
+        return redirect(url_for("dashboard"))
+
+    try:
+        subject_id = int(subject_id_raw)
+        response = (
+            db.supabase.table("subjects")
+            .select("id, name")
+            .eq("id", subject_id)
+            .limit(1)
+            .execute()
+        )
+        subject = (response.data or [None])[0]
+
+        if not subject:
+            flash("ไม่พบรายวิชาที่เลือก", "error")
+        else:
+            with active_subject_lock:
+                active_subject_id = subject_id
+            print(
+                f"[SUBJECT DEBUG] เริ่มเช็กชื่อ: "
+                f"active_subject_id={active_subject_id}, "
+                f"name={subject.get('name')}"
+            )
+            flash(f"เริ่มเช็กชื่อรายวิชา {subject.get('name')}", "success")
+    except (TypeError, ValueError):
+        flash("รหัสรายวิชาไม่ถูกต้อง", "error")
+    except Exception as exc:
+        flash(f"กำหนดรายวิชาที่เช็กชื่อไม่สำเร็จ: {exc}", "error")
+
+    return redirect(url_for("dashboard"))
 
 
 @app.route("/api/scans/recent")
@@ -165,87 +203,115 @@ def api_recent_scans():
 # API Scan
 # =========================================================
 
+
 @app.route("/api/scan", methods=["POST"])
 def api_scan():
+    payload = request.get_json(silent=True) or {}
 
-    payload = request.get_json(
-        silent=True
-    ) or {}
+    fingerprint_id = str(
+        payload.get("fingerprint_id") or ""
+    ).strip()
 
-    fingerprint_id = payload.get(
-        "fingerprint_id"
-    )
-
-    scanned_at = (
-        payload.get("scanned_at")
-        or datetime.now().isoformat(
-            timespec="seconds"
-        )
-    )
+    scanned_at = payload.get("scanned_at") or datetime.now(
+        THAI_TZ
+    ).isoformat(timespec="seconds")
 
     if not fingerprint_id:
         return jsonify({
             "error": "ต้องระบุ fingerprint_id"
         }), 400
 
-    # -----------------------------------------------------
-    # ค้นหาผู้ใช้จาก Supabase
-    # -----------------------------------------------------
+    # ค้นหาผู้ใช้จาก fingerprint_id
+    user = db.get_user_by_fingerprint(fingerprint_id)
 
-    user = db.get_user_by_fingerprint(
-        fingerprint_id
+    # อ่านรายวิชาที่กำลังเช็กชื่อ
+    with active_subject_lock:
+        subject_id = active_subject_id
+
+    print(
+        f"[SCAN DEBUG] fingerprint_id={fingerprint_id}, "
+        f"subject_id={subject_id}, "
+        f"scanned_at={scanned_at}"
     )
 
-    # -----------------------------------------------------
-    # พบผู้ใช้
-    # -----------------------------------------------------
-
+    # กรณีพบผู้ใช้
     if user:
+        attendance_status = None
+
+        if subject_id is not None:
+            attendance_status = get_attendance_status(
+                subject_id,
+                scanned_at
+            )
+
+        print(
+            f"[ATTENDANCE DEBUG] "
+            f"student_id={user.get('student_id')}, "
+            f"attendance_status={attendance_status}"
+        )
+
+        # สถานะการเข้าเรียน
+        # on_time = ตรงเวลา
+        # late = มาสาย
+        # matched = พบผู้ใช้ แต่ยังไม่มีสถานะเข้าเรียน
+        log_status = attendance_status or "matched"
 
         db.add_scan_log(
             fingerprint_id,
             user["id"],
-            "matched",
+            log_status,
             scanned_at,
+            subject_id=subject_id,
         )
 
         return jsonify({
-            "status": "matched",
-            "student_id": user["student_id"],
-            "full_name": user["full_name"],
-            "department": user["department"],
+            "status": log_status,
+            "attendance_status": attendance_status,
+            "student_id": user.get("student_id"),
+            "full_name": user.get("full_name"),
+            "department": user.get("department"),
+            "subject_id": subject_id,
             "scanned_at": scanned_at,
-        })
+        }), 200
 
-    # -----------------------------------------------------
-    # ไม่พบผู้ใช้
-    # -----------------------------------------------------
-
+    # กรณีไม่พบผู้ใช้
     db.add_scan_log(
         fingerprint_id,
         None,
         "unmatched",
         scanned_at,
+        subject_id=subject_id,
     )
 
     return jsonify({
         "status": "unmatched",
+        "attendance_status": None,
+        "subject_id": subject_id,
+        "fingerprint_id": fingerprint_id,
         "scanned_at": scanned_at,
     }), 200
 
-
-# =========================================================
 # Users
 # =========================================================
 
 @app.route("/users")
 def users_page():
-
     users = db.get_all_users()
+    sections = _master_list("sections", "name")
+
+    # แสดงชื่อ Section จาก Master โดยไม่ต้องเก็บชื่อซ้ำใน users
+    for user in users:
+        section_id = user.get("section_id")
+        section = next(
+            (item for item in sections if str(item.get("id")) == str(section_id)),
+            None,
+        )
+        user["section_name"] = section.get("name") if section else "-"
 
     return render_template(
         "users.html",
         users=users,
+        sections=sections,
     )
 
 
@@ -271,6 +337,29 @@ def users_add():
         "fingerprint_id",
         ""
     ).strip()
+
+    section_id_raw = (request.form.get("section_id") or "").strip()
+    # รองรับฟอร์มเดิมที่ยังส่งชื่อ Section มา
+    section_name = (request.form.get("section") or "").strip()
+    section_id = None
+
+    if section_id_raw:
+        try:
+            section_id = int(section_id_raw)
+        except ValueError:
+            flash("Section ไม่ถูกต้อง", "error")
+            return redirect(url_for("users_page"))
+    elif section_name:
+        response = db.supabase.table("sections").select("id,name").execute()
+        matched = next(
+            (item for item in (response.data or [])
+             if item.get("name", "").strip().casefold() == section_name.casefold()),
+            None,
+        )
+        if not matched:
+            flash(f"ไม่พบ Section '{section_name}' ใน Master Section", "error")
+            return redirect(url_for("users_page"))
+        section_id = int(matched["id"])
 
     # -----------------------------------------------------
     # Validate
@@ -308,6 +397,7 @@ def users_add():
             department,
             fingerprint_id,
             created_at=created_at,
+            section_id=section_id,
         )
 
         flash(
@@ -365,31 +455,56 @@ def users_import_excel():
             workbook.close()
             return redirect(url_for("users_page"))
 
-        rows = []
+        # โหลด Master Section ครั้งเดียว แล้วจับคู่ชื่อจาก Excel เป็น section_id
+        section_response = db.supabase.table("sections").select("id,name").execute()
+        section_map = {
+            str(item.get("name", "")).strip().casefold(): int(item["id"])
+            for item in (section_response.data or [])
+            if item.get("name") and item.get("id") is not None
+        }
 
-        for values in sheet.iter_rows(min_row=2, values_only=True):
+        rows = []
+        row_errors = []
+
+        for excel_row_number, values in enumerate(
+            sheet.iter_rows(min_row=2, values_only=True), start=2
+        ):
             row = dict(zip(headers, values))
 
             student_id = str(row.get("student_id") or "").strip()
             full_name = str(row.get("full_name") or "").strip()
             department = str(row.get("department") or "").strip()
+            section_name = str(row.get("section") or "").strip()
 
-            # ข้ามแถวว่าง
-            if not student_id and not full_name and not department:
+            if not student_id and not full_name and not department and not section_name:
                 continue
+
+            section_id = None
+            if section_name:
+                section_id = section_map.get(section_name.casefold())
+                if section_id is None:
+                    row_errors.append({
+                        "row": excel_row_number,
+                        "message": f"ไม่พบ Section '{section_name}' ใน Master Section",
+                    })
+                    continue
 
             rows.append({
                 "student_id": student_id,
                 "full_name": full_name,
-                "department": department
+                "department": department,
+                "section_id": section_id,
             })
 
         workbook.close()
 
         result = db.import_users_from_excel(rows)
+        result.setdefault("errors", [])
+        result["errors"] = row_errors + result["errors"]
 
         flash(
-            f"นำเข้าสำเร็จ {result['inserted']} คน, "
+            f"เพิ่มใหม่ {result['inserted']} คน, "
+            f"อัปเดตข้อมูลเดิม {result.get('updated', 0)} คน, "
             f"ข้าม {result['skipped']} คน, "
             f"ผิดพลาด {len(result['errors'])} รายการ",
             "success" if not result["errors"] else "error"
@@ -443,6 +558,101 @@ def users_delete(user_id):
 # =========================================================
 # Reports
 # =========================================================
+
+
+
+# =========================================================
+# Master Data: Sections and Subjects
+# =========================================================
+
+def _master_list(table, order_column):
+    response = db.supabase.table(table).select("*").order(order_column).execute()
+    return response.data or []
+
+@app.route("/masters/sections", methods=["GET", "POST"])
+def sections_page():
+    if request.method == "POST":
+        name = (request.form.get("name") or "").strip()
+        if not name:
+            flash("กรุณากรอกชื่อ Section", "error")
+        else:
+            try:
+                db.supabase.table("sections").insert({"name": name}).execute()
+                flash("เพิ่ม Section สำเร็จ", "success")
+            except Exception as exc:
+                flash(f"เพิ่ม Section ไม่สำเร็จ: {exc}", "error")
+        return redirect(url_for("sections_page"))
+    try:
+        sections = _master_list("sections", "name")
+    except Exception as exc:
+        sections = []
+        flash("อ่านตาราง sections ไม่สำเร็จ กรุณารัน SQL สำหรับ Master Data ก่อน: " + str(exc), "error")
+    return render_template("sections.html", sections=sections)
+
+@app.route("/masters/sections/<int:section_id>/delete", methods=["POST"])
+def sections_delete(section_id):
+    try:
+        db.supabase.table("sections").delete().eq("id", section_id).execute()
+        flash("ลบ Section สำเร็จ", "success")
+    except Exception as exc:
+        flash(f"ลบ Section ไม่สำเร็จ: {exc}", "error")
+    return redirect(url_for("sections_page"))
+
+@app.route("/masters/subjects", methods=["GET", "POST"])
+def subjects_page():
+    if request.method == "POST":
+        code = (request.form.get("code") or "").strip() or None
+        name = (request.form.get("name") or "").strip()
+        section_id_raw = (request.form.get("section_id") or "").strip()
+        start_time = (request.form.get("start_time") or "").strip() or None
+        end_time = (request.form.get("end_time") or "").strip() or None
+        late_after_raw = (request.form.get("late_after_minutes") or "0").strip()
+
+        if not name:
+            flash("กรุณากรอกชื่อวิชา", "error")
+        elif not section_id_raw:
+            flash("กรุณาเลือก Section", "error")
+        elif not start_time or not end_time:
+            flash("กรุณาระบุเวลาเริ่มเรียนและเวลาเลิกเรียน", "error")
+        else:
+            try:
+                section_id = int(section_id_raw)
+                late_after_minutes = max(0, int(late_after_raw or "0"))
+                payload = {
+                    "code": code,
+                    "name": name,
+                    "section_id": section_id,
+                    "start_time": start_time,
+                    "end_time": end_time,
+                    "late_after_minutes": late_after_minutes,
+                }
+                db.supabase.table("subjects").insert(payload).execute()
+                flash("เพิ่มวิชาและกำหนดเวลาเรียนสำเร็จ", "success")
+            except Exception as exc:
+                flash(f"เพิ่มวิชาไม่สำเร็จ: {exc}", "error")
+        return redirect(url_for("subjects_page"))
+
+    try:
+        sections = _master_list("sections", "name")
+    except Exception as exc:
+        sections = []
+        flash("อ่านตาราง sections ไม่สำเร็จ กรุณารัน SQL สำหรับ Master Data ก่อน: " + str(exc), "error")
+    try:
+        subjects = db.supabase.table("subjects").select("*, sections(name)").order("name").execute().data or []
+    except Exception as exc:
+        subjects = []
+        flash("อ่านตาราง subjects ไม่สำเร็จ กรุณารัน SQL อัปเดตตารางก่อน: " + str(exc), "error")
+    return render_template("subjects.html", subjects=subjects, sections=sections)
+
+@app.route("/masters/subjects/<int:subject_id>/delete", methods=["POST"])
+def subjects_delete(subject_id):
+    try:
+        db.supabase.table("subjects").delete().eq("id", subject_id).execute()
+        flash("ลบวิชาสำเร็จ", "success")
+    except Exception as exc:
+        flash(f"ลบวิชาไม่สำเร็จ: {exc}", "error")
+    return redirect(url_for("subjects_page"))
+
 
 @app.route("/reports")
 def reports_page():
@@ -603,11 +813,32 @@ def reports_export():
 def api_enroll():
     payload = request.get_json(silent=True) or {}
     fingerprint_id = str(payload.get("fingerprint_id", "")).strip()
+    replace_existing = payload.get("replace_existing") is True
 
     if not fingerprint_id.isdigit():
         return jsonify({
             "error": "รหัสลายนิ้วมือต้องเป็นตัวเลข"
         }), 400
+
+    # ถ้ามี Template อยู่แล้ว ต้องให้หน้าเว็บถามผู้ใช้ก่อนส่ง replace_existing=True
+    try:
+        has_template = db.has_fingerprint_template(fingerprint_id)
+    except AttributeError:
+        return jsonify({
+            "error": "database.py ยังไม่มีฟังก์ชัน has_fingerprint_template()"
+        }), 500
+    except Exception as exc:
+        print(f"[ENROLL] ตรวจสอบ Template ไม่สำเร็จ: {exc}")
+        return jsonify({
+            "error": "ตรวจสอบลายนิ้วมือเดิมใน Supabase ไม่สำเร็จ"
+        }), 500
+
+    if has_template and not replace_existing:
+        return jsonify({
+            "requires_confirmation": True,
+            "fingerprint_id": fingerprint_id,
+            "message": "ผู้ใช้นี้มีลายนิ้วมืออยู่แล้ว ต้องการเปลี่ยนลายนิ้วมือหรือไม่?"
+        }), 409
 
     with enrollment_lock:
         if any(
@@ -623,6 +854,7 @@ def api_enroll():
         job = {
             "job_id": job_id,
             "fingerprint_id": fingerprint_id,
+            "replace_existing": replace_existing,
             "status": "pending",
             "message": "รอเครื่องสแกนรับงาน"
         }
@@ -707,6 +939,93 @@ def api_enroll_reset():
 # =========================================================
 
 
+def get_attendance_status(subject_id, scanned_at):
+    """
+    คืนค่า on_time หรือ late ตามเวลาเริ่มเรียนและนาทีผ่อนผันของรายวิชา
+    คืน None หากยังไม่ได้เลือกรายวิชา หรือไม่มีข้อมูลเวลาเริ่มเรียน
+    """
+    if subject_id is None or str(subject_id).strip() == "":
+        return None
+
+    response = (
+        db.supabase.table("subjects")
+        .select("id, name, start_time, late_after_minutes")
+        .eq("id", int(subject_id))
+        .limit(1)
+        .execute()
+    )
+    subjects = response.data or []
+    if not subjects:
+        print(f"[ATTENDANCE DEBUG] ไม่พบ subject_id={subject_id}")
+        return None
+
+    subject = subjects[0]
+    start_time_value = subject.get("start_time")
+    if not start_time_value:
+        print(
+            f"[ATTENDANCE DEBUG] วิชา {subject_id} "
+            "ไม่มี start_time"
+        )
+        return None
+
+    # รองรับเวลาจากฐานข้อมูลทั้งรูปแบบ HH:MM และ HH:MM:SS
+    start_time_text = str(start_time_value).strip()
+    parsed_start_time = None
+    for time_format in ("%H:%M:%S", "%H:%M"):
+        try:
+            parsed_start_time = datetime.strptime(
+                start_time_text[:8] if time_format == "%H:%M:%S"
+                else start_time_text[:5],
+                time_format
+            ).time()
+            break
+        except ValueError:
+            continue
+
+    if parsed_start_time is None:
+        print(
+            f"[ATTENDANCE ERROR] รูปแบบ start_time ไม่ถูกต้อง: "
+            f"{start_time_value!r}"
+        )
+        return None
+
+    try:
+        scan_datetime = datetime.fromisoformat(
+            str(scanned_at).replace("Z", "+00:00")
+        )
+    except (TypeError, ValueError):
+        print(f"[ATTENDANCE ERROR] scanned_at ไม่ถูกต้อง: {scanned_at!r}")
+        return None
+
+    if scan_datetime.tzinfo is None:
+        scan_datetime = scan_datetime.replace(tzinfo=THAI_TZ)
+    else:
+        scan_datetime = scan_datetime.astimezone(THAI_TZ)
+
+    start_datetime = datetime.combine(
+        scan_datetime.date(),
+        parsed_start_time,
+        tzinfo=THAI_TZ
+    )
+
+    try:
+        grace_minutes = max(0, int(subject.get("late_after_minutes") or 0))
+    except (TypeError, ValueError):
+        grace_minutes = 0
+
+    deadline = start_datetime + timedelta(minutes=grace_minutes)
+    result = "on_time" if scan_datetime <= deadline else "late"
+
+    print(
+        f"[ATTENDANCE DEBUG] subject_id={subject_id}, "
+        f"subject={subject.get('name')}, "
+        f"start={start_datetime.isoformat()}, "
+        f"deadline={deadline.isoformat()}, "
+        f"scan={scan_datetime.isoformat()}, "
+        f"result={result}"
+    )
+    return result
+
 
 def scanner_worker():
     zk = ZKFP2()
@@ -715,10 +1034,6 @@ def scanner_worker():
     templates = {}
     last_id = None
     last_time = 0.0
-
-    template_file = Path(__file__).with_name(
-        "fingerprint_templates.json"
-    )
 
     def capture_template():
         # รอจนกว่าจะมีการวางนิ้ว
@@ -745,9 +1060,12 @@ def scanner_worker():
             )
 
         try:
-            if fingerprint_id in templates:
+            existing_template = templates.get(fingerprint_id)
+            replace_existing = job.get("replace_existing") is True
+
+            if existing_template and not replace_existing:
                 raise ValueError(
-                    "รหัสนี้มี Template อยู่แล้ว กรุณาตรวจสอบก่อนลงทะเบียนใหม่"
+                    "รหัสนี้มี Template อยู่แล้ว ต้องยืนยันเปลี่ยนลายนิ้วมือก่อน"
                 )
 
             captures = []
@@ -780,31 +1098,37 @@ def scanner_worker():
 
             if merged_length and len(merged) != int(merged_length):
                 raise RuntimeError("ความยาว Template ไม่ถูกต้อง")
-            zk.DBAdd(fid, merged)
-            template_base64 = base64.b64encode(
-                merged
-            ).decode("ascii")
-            db.update_fingerprint_template(
-                fingerprint_id,
-                template_base64
-            )
-            templates[fingerprint_id] = template_base64
+            # บันทึก Supabase ก่อน แล้วอัปเดต SDK; เก็บ Template เดิมไว้เผื่อ rollback
+            template_base64 = base64.b64encode(merged).decode("ascii")
+            db.update_fingerprint_template(fingerprint_id, template_base64)
 
             try:
-                temp_file = template_file.with_suffix(".tmp")
-                temp_file.write_text(
-                    json.dumps(templates, ensure_ascii=False, indent=2),
-                    encoding="utf-8"
-                )
-                temp_file.replace(template_file)
+                try:
+                    zk.DBDel(fid)
+                except Exception:
+                    # DBDel อาจแจ้ง error เมื่อไม่มี ID อยู่ใน SDK
+                    pass
+
+                zk.DBAdd(fid, merged)
+                templates[fingerprint_id] = merged
             except Exception:
-                # ยกเลิกการลงทะเบียนใน SDK หากบันทึกไฟล์ไม่ได้
+                # ถ้า SDK อัปเดตไม่สำเร็จ ให้คืน Template เดิมใน SDK หากมี
                 try:
                     zk.DBDel(fid)
                 except Exception:
                     pass
 
-                templates.pop(fingerprint_id, None)
+                if existing_template:
+                    try:
+                        zk.DBAdd(fid, existing_template)
+                        templates[fingerprint_id] = existing_template
+                    except Exception as restore_exc:
+                        print(
+                            f"[SCANNER] คืน Template เดิมใน SDK ไม่สำเร็จ: "
+                            f"{restore_exc}"
+                        )
+                else:
+                    templates.pop(fingerprint_id, None)
                 raise
 
             with enrollment_lock:
@@ -832,16 +1156,46 @@ def scanner_worker():
         zk.OpenDevice(0)
         opened = True
 
-        if template_file.exists():
-            templates = json.loads(
-                template_file.read_text(encoding="utf-8")
-            )
+        # โหลด Template จาก Supabase เท่านั้น ไม่ใช้ fingerprint_templates.json
+        loaded_templates = db.get_all_fingerprint_templates() or {}
+        templates = {}
 
-        for fingerprint_id, encoded in templates.items():
-            zk.DBAdd(
-                int(fingerprint_id),
-                base64.b64decode(encoded)
-            )
+        for fingerprint_id, template in loaded_templates.items():
+            if template is None:
+                continue
+
+            if isinstance(template, str):
+                # รองรับกรณี database.py คืนค่า Base64 string
+                template_bytes = base64.b64decode(template, validate=True)
+            else:
+                template_bytes = bytes(template)
+
+            normalized_id = str(fingerprint_id).strip()
+
+            if not normalized_id.isdigit():
+                raise ValueError(
+                    f"Fingerprint ID ต้องเป็นตัวเลข: {normalized_id}"
+                )
+
+            if not template_bytes:
+                raise ValueError(
+                    f"Template ว่าง: fingerprint_id={normalized_id}"
+                )
+
+            try:
+                zk.DBAdd(int(normalized_id), template_bytes)
+                templates[normalized_id] = template_bytes
+                print(
+                    f"[SCANNER] โหลด Template {normalized_id} สำเร็จ"
+                )
+            except Exception as exc:
+                print(
+                    f"[SCANNER ERROR] โหลด Template ไม่สำเร็จ: "
+                    f"id={normalized_id}, "
+                    f"bytes={len(template_bytes)}, "
+                    f"error={exc!r}"
+                )
+                raise
 
         scanner_status["ready"] = True
         scanner_status["error"] = None
@@ -890,15 +1244,38 @@ def scanner_worker():
                     or now - last_time >= 3
                 ):
                     user = db.get_user_by_fingerprint(fingerprint_id)
+
                     scanned_at = datetime.now().astimezone().isoformat(
                         timespec="seconds"
+                    )
+
+                    with active_subject_lock:
+                        subject_id = active_subject_id
+
+                    if user:
+                        attendance_status = get_attendance_status(
+                            subject_id,
+                            scanned_at
+                        )
+                        # matched หมายถึงพบผู้ใช้แต่ยังคำนวณสถานะเข้าเรียนไม่ได้
+                        log_status = attendance_status or "matched"
+                    else:
+                        attendance_status = None
+                        log_status = "unmatched"
+
+                    print(
+                        f"[SCAN DEBUG] fingerprint_id={fingerprint_id}, "
+                        f"subject_id={subject_id}, "
+                        f"attendance_status={attendance_status}, "
+                        f"log_status={log_status}"
                     )
 
                     db.add_scan_log(
                         fingerprint_id,
                         user["id"] if user else None,
-                        "matched" if user else "unmatched",
-                        scanned_at
+                        log_status,
+                        scanned_at,
+                        subject_id=subject_id,
                     )
 
                     print(

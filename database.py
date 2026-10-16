@@ -1,16 +1,9 @@
-"""
-database.py
------------
-จัดการฐานข้อมูล Supabase
-สำหรับระบบเช็คชื่อด้วยลายนิ้วมือ
-"""
-
 import os
 from datetime import datetime
 
 from dotenv import load_dotenv
 from supabase import create_client, Client
-
+import base64
 
 # =========================================================
 # Supabase Connection
@@ -60,21 +53,32 @@ def add_user(
     student_id,
     full_name,
     department,
-    fingerprint_id
+    fingerprint_id,
+    section=None,
+    created_at=None,
+    section_id=None,
 ):
     """
-    เพิ่มผู้ใช้งาน
+    เพิ่มผู้ใช้งานให้เข้ากับ app.py
+    รองรับ section_id (FK ไปยัง sections.id) และ created_at
     """
 
     data = {
-        "student_id": student_id,
-        "full_name": full_name,
-        "department": department,
-        "fingerprint_id": fingerprint_id,
-        "created_at": datetime.now().isoformat(
+        "student_id": str(student_id).strip(),
+        "full_name": str(full_name).strip(),
+        "department": department or None,
+        "fingerprint_id": str(fingerprint_id).strip(),
+        "created_at": created_at or datetime.now().astimezone().isoformat(
             timespec="seconds"
         ),
     }
+
+    # โครงสร้างปัจจุบันใช้ section_id เป็น Foreign Key
+    if section_id is not None:
+        data["section_id"] = section_id
+    elif section is not None:
+        # รองรับข้อมูลเก่าที่ส่งชื่อ section มา หาก schema ยังมีคอลัมน์นี้
+        data["section"] = section
 
     response = (
         supabase
@@ -139,17 +143,11 @@ def delete_user(user_id):
 
 
 def import_users_from_excel(rows):
-    """
-    นำเข้ารายชื่อจาก Excel
-
-    rows: list ของ dict ที่มี student_id, full_name, department
-
-    เพิ่มเฉพาะผู้ใช้ที่ยังไม่มีใน Supabase
-    โดยกำหนด fingerprint_id ให้เท่ากับ student_id
-    """
+    """นำเข้ารายชื่อจาก Excel; ถ้า student_id มีอยู่แล้วให้อัปเดตข้อมูลเดิม"""
 
     result = {
         "inserted": 0,
+        "updated": 0,
         "skipped": 0,
         "errors": []
     }
@@ -157,7 +155,9 @@ def import_users_from_excel(rows):
     for index, row in enumerate(rows, start=2):
         student_id = str(row.get("student_id") or "").strip()
         full_name = str(row.get("full_name") or "").strip()
-        department = str(row.get("department") or "").strip()
+        department = str(row.get("department") or "").strip() or None
+        section_id = row.get("section_id")
+        section = str(row.get("section") or "").strip() or None
 
         if not student_id or not full_name:
             result["skipped"] += 1
@@ -170,39 +170,59 @@ def import_users_from_excel(rows):
         fingerprint_id = student_id
 
         try:
-            # ตรวจสอบรหัสนักศึกษาซ้ำ
             existing_student = (
                 supabase.table("users")
-                .select("id")
+                .select("id, fingerprint_id")
                 .eq("student_id", student_id)
                 .limit(1)
                 .execute()
             )
 
             if existing_student.data:
-                result["skipped"] += 1
+                existing = existing_student.data[0]
+                # อัปเดตเฉพาะข้อมูลผู้ใช้ ไม่แตะ fingerprint_template เพื่อรักษาลายนิ้วมือเดิม
+                update_data = {
+                    "full_name": full_name,
+                    "department": department,
+                    "fingerprint_id": fingerprint_id,
+                }
+                if section_id is not None:
+                    update_data["section_id"] = section_id
+                elif section is not None:
+                    update_data["section"] = section
+                (
+                    supabase.table("users")
+                    .update(update_data)
+                    .eq("id", existing["id"])
+                    .execute()
+                )
+                result["updated"] += 1
                 continue
 
-            # ตรวจสอบรหัสลายนิ้วมือซ้ำ
+            # ป้องกัน fingerprint_id ไปชนกับผู้ใช้อื่นที่มี student_id คนละค่า
             existing_fingerprint = (
                 supabase.table("users")
-                .select("id")
+                .select("id, student_id")
                 .eq("fingerprint_id", fingerprint_id)
                 .limit(1)
                 .execute()
             )
-
             if existing_fingerprint.data:
                 result["skipped"] += 1
+                result["errors"].append({
+                    "row": index,
+                    "message": f"fingerprint_id {fingerprint_id} ถูกใช้โดย student_id อื่นแล้ว"
+                })
                 continue
 
             add_user(
                 student_id=student_id,
                 full_name=full_name,
                 department=department,
-                fingerprint_id=fingerprint_id
+                fingerprint_id=fingerprint_id,
+                section=section,
+                section_id=section_id
             )
-
             result["inserted"] += 1
 
         except Exception as exc:
@@ -214,15 +234,127 @@ def import_users_from_excel(rows):
     return result
 
 
+# =========================================================
+# Fingerprint Templates - Supabase
+# =========================================================
+
+def has_fingerprint_template(fingerprint_id):
+    """
+    ตรวจสอบว่าผู้ใช้มี Template อยู่ใน Supabase แล้วหรือไม่
+    """
+
+    response = (
+        supabase
+        .table("users")
+        .select("fingerprint_template")
+        .eq("fingerprint_id", str(fingerprint_id))
+        .limit(1)
+        .execute()
+    )
+
+    if not response.data:
+        return False
+
+    return bool(
+        response.data[0].get("fingerprint_template")
+    )
+
+
+def get_fingerprint_template(fingerprint_id):
+    """
+    ดึง Template จาก Supabase และแปลง Base64 กลับเป็น bytes
+    """
+
+    response = (
+        supabase
+        .table("users")
+        .select("fingerprint_template")
+        .eq("fingerprint_id", str(fingerprint_id))
+        .limit(1)
+        .execute()
+    )
+
+    if not response.data:
+        return None
+
+    template = response.data[0].get("fingerprint_template")
+
+    if not template:
+        return None
+
+    return base64.b64decode(template, validate=True)
+
+
+def get_all_fingerprint_templates():
+    """
+    โหลด Template ทั้งหมดจาก Supabase
+    คืนค่าเป็น dict: {fingerprint_id: template_bytes}
+    """
+
+    response = (
+        supabase
+        .table("users")
+        .select("fingerprint_id, fingerprint_template")
+        .not_.is_("fingerprint_template", "null")
+        .execute()
+    )
+
+    templates = {}
+
+    for row in response.data or []:
+        fingerprint_id = row.get("fingerprint_id")
+        template = row.get("fingerprint_template")
+
+        if fingerprint_id is None or not template:
+            continue
+
+        templates[str(fingerprint_id)] = base64.b64decode(
+            template,
+            validate=True
+        )
+
+    return templates
+
+
 def update_fingerprint_template(fingerprint_id, template):
-    return (
-        supabase.table("users")
+    """
+    บันทึก Template ลง Supabase ในรูปแบบ Base64
+
+    template รับ bytes จาก SDK หรือ Base64 string
+    """
+
+    if isinstance(template, bytes):
+        encoded_template = base64.b64encode(
+            template
+        ).decode("ascii")
+
+    elif isinstance(template, str):
+        # รองรับกรณีต้นทางส่ง Base64 string มาแล้ว
+        base64.b64decode(template, validate=True)
+        encoded_template = template
+
+    else:
+        raise TypeError(
+            "template ต้องเป็น bytes หรือ Base64 string"
+        )
+
+    response = (
+        supabase
+        .table("users")
         .update({
-            "fingerprint_template": template
+            "fingerprint_template": encoded_template
         })
         .eq("fingerprint_id", str(fingerprint_id))
         .execute()
     )
+
+    if not response.data:
+        raise ValueError(
+            f"ไม่พบผู้ใช้ fingerprint_id={fingerprint_id} "
+            "ใน Supabase"
+        )
+
+    return response.data
 # =========================================================
 # Scan Logs
 # =========================================================
@@ -231,39 +363,23 @@ def add_scan_log(
     fingerprint_id,
     user_id,
     status,
-    scanned_at=None
+    scanned_at=None,
+    subject_id=None,
 ):
-    """
-    บันทึกประวัติการสแกน
-    """
-
+    """บันทึกประวัติการสแกน พร้อมรายวิชาที่กำลังเช็กชื่อ (ถ้ามี)"""
     data = {
-        "fingerprint_id": fingerprint_id,
+        "fingerprint_id": str(fingerprint_id),
         "user_id": user_id,
         "status": status,
-        "scanned_at": (
-            scanned_at
-            or datetime.now().isoformat(
-                timespec="seconds"
-            )
-        ),
+        "scanned_at": scanned_at or datetime.now().astimezone().isoformat(timespec="seconds"),
+        "subject_id": subject_id,
     }
-
-    response = (
-        supabase
-        .table("scan_logs")
-        .insert(data)
-        .execute()
-    )
-
+    response = supabase.table("scan_logs").insert(data).execute()
     return response.data
 
 
 def get_recent_logs(limit=50):
-    """
-    ดึงประวัติการสแกนล่าสุด
-    """
-
+    """ดึงประวัติการสแกนล่าสุด พร้อมข้อมูลผู้ใช้และรายวิชา"""
     response = (
         supabase
         .table("scan_logs")
@@ -273,11 +389,9 @@ def get_recent_logs(limit=50):
             scanned_at,
             status,
             fingerprint_id,
-            users (
-                student_id,
-                full_name,
-                department
-            )
+            subject_id,
+            users (student_id, full_name, department),
+            subjects (id, code, name)
             """
         )
         .order("scanned_at", desc=True)
@@ -286,11 +400,9 @@ def get_recent_logs(limit=50):
     )
 
     rows = []
-
     for row in response.data or []:
-
         user = row.get("users") or {}
-
+        subject = row.get("subjects") or {}
         rows.append({
             "id": row.get("id"),
             "scanned_at": row.get("scanned_at"),
@@ -299,8 +411,10 @@ def get_recent_logs(limit=50):
             "student_id": user.get("student_id"),
             "full_name": user.get("full_name"),
             "department": user.get("department"),
+            "subject_id": row.get("subject_id"),
+            "subject_code": subject.get("code"),
+            "subject_name": subject.get("name"),
         })
-
     return rows
 
 

@@ -18,6 +18,10 @@
     <nav>
       <a href="{{ url_for('dashboard') }}" class="{{ 'active' if request.path == '/' }}">Dashboard</a>
       <a href="{{ url_for('users_page') }}" class="{{ 'active' if request.path.startswith('/users') }}">Users</a>
+      <a href="{{ url_for('sections_page') }}"
+        class="{{ 'active' if request.path.startswith('/sections') }}">Section</a>
+      <a href="{{ url_for('subjects_page') }}"
+        class="{{ 'active' if request.path.startswith('/subjects') }}">Subject</a>
       <a href="{{ url_for('reports_page') }}" class="{{ 'active' if request.path.startswith('/reports') }}">Report</a>
     </nav>
   </header>
