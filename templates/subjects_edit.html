@@ -1,0 +1,169 @@
+
+{% extends "base.html" %}
+{% block title %}แก้ไขรายวิชา{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>แก้ไขรายวิชา</h1>
+  <a href="{{ url_for('subjects_page') }}" class="btn-export">กลับรายการวิชา</a>
+</div>
+
+<div class="card">
+  <h2>ข้อมูลรายวิชา</h2>
+
+  <form method="POST" class="form-grid">
+    <div class="field">
+      <label>รหัสวิชา <span style="color: red;">*</span></label>
+      <input
+        type="text"
+        name="code"
+        value="{{ subject.code or '' }}"
+        placeholder="กรอกรหัสวิชา"
+        required
+      >
+    </div>
+
+    <div class="field">
+      <label>ชื่อวิชา <span style="color: red;">*</span></label>
+      <input
+        type="text"
+        name="name"
+        value="{{ subject.name or '' }}"
+        placeholder="ชื่อวิชา"
+        required
+      >
+    </div>
+
+    <div class="field full-width">
+      <label>Section <span style="color: red;">*</span></label>
+      <select name="section_id" required>
+        <option value="">-- เลือก Section --</option>
+        {% for section in sections %}
+        <option
+          value="{{ section.id }}"
+          {% if section.id == subject.section_id %}selected{% endif %}
+        >
+          {{ section.name }}
+        </option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <div class="field full-width">
+      <label>วันเรียน (เลือกได้มากกว่า 1 วัน)</label>
+      <div class="days-checkbox">
+        {% for day_value, day_label in [
+          ('Monday', 'วันจันทร์'),
+          ('Tuesday', 'วันอังคาร'),
+          ('Wednesday', 'วันพุธ'),
+          ('Thursday', 'วันพฤหัสบดี'),
+          ('Friday', 'วันศุกร์'),
+          ('Saturday', 'วันเสาร์'),
+          ('Sunday', 'วันอาทิตย์')
+        ] %}
+        <label>
+          <input
+            type="checkbox"
+            name="class_days"
+            value="{{ day_value }}"
+            {% if day_value in (subject.class_days or []) %}checked{% endif %}
+          >
+          {{ day_label }}
+        </label>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="field">
+      <label>เวลาเริ่มเรียน <span style="color: red;">*</span></label>
+      <input
+        type="text"
+        name="start_time"
+        class="time-input"
+        value="{{ (subject.start_time|string)[:5] if subject.start_time else '' }}"
+        placeholder="เช่น 0800"
+        maxlength="5"
+        inputmode="numeric"
+        autocomplete="off"
+        required
+      >
+      <small class="hint">กรอก 4 หลัก เช่น 0800 จะแสดงเป็น 08:00</small>
+    </div>
+
+    <div class="field">
+      <label>เวลาเลิกเรียน <span style="color: red;">*</span></label>
+      <input
+        type="text"
+        name="end_time"
+        class="time-input"
+        value="{{ (subject.end_time|string)[:5] if subject.end_time else '' }}"
+        placeholder="เช่น 1200"
+        maxlength="5"
+        inputmode="numeric"
+        autocomplete="off"
+        required
+      >
+      <small class="hint">กรอก 4 หลัก เช่น 1200 จะแสดงเป็น 12:00</small>
+    </div>
+
+    <div class="field">
+      <label>อนุโลมก่อนถือว่าสาย (นาที)</label>
+      <input
+        type="text"
+        name="late_after_minutes"
+        class="minutes-input"
+        inputmode="numeric"
+        pattern="[0-9]+"
+        maxlength="4"
+        value="{{ subject.late_after_minutes if subject.late_after_minutes is not none else 0 }}"
+        required
+      >
+      <small class="hint">กรอกได้เฉพาะตัวเลข 0 ขึ้นไป</small>
+    </div>
+
+    <div class="field submit button-submit">
+      <button type="submit">บันทึกการแก้ไข</button>
+      <a href="{{ url_for('subjects_page') }}" class="btn-cancel">ยกเลิก</a>
+    </div>
+  </form>
+</div>
+
+<script>
+  document.querySelectorAll('.time-input').forEach(input => {
+    input.addEventListener('input', function () {
+      let value = this.value.replace(/\D/g, '').slice(0, 4);
+
+      if (value.length === 4) {
+        value = value.slice(0, 2) + ':' + value.slice(2);
+      }
+
+      this.value = value;
+      this.setCustomValidity('');
+    });
+
+    input.addEventListener('blur', function () {
+      const value = this.value.replace(/\D/g, '');
+
+      if (value.length !== 4) {
+        this.setCustomValidity('กรุณากรอกเวลา 4 หลัก เช่น 0800');
+        return;
+      }
+
+      const hour = Number(value.slice(0, 2));
+      const minute = Number(value.slice(2, 4));
+
+      if (hour > 23 || minute > 59) {
+        this.setCustomValidity('กรุณากรอกเวลาให้ถูกต้อง เช่น 0800 หรือ 1200');
+      } else {
+        this.setCustomValidity('');
+      }
+    });
+  });
+
+  document.querySelectorAll('.minutes-input').forEach(input => {
+    input.addEventListener('input', function () {
+      this.value = this.value.replace(/[^0-9]/g, '');
+    });
+  });
+</script>
+{% endblock %}

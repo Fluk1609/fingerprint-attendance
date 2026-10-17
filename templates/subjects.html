@@ -1,11 +1,33 @@
 {% extends "base.html" %}
-{% block title %}Master Subject{% endblock %}
+{% block title %}Subjects{% endblock %}
 {% block content %}
 <div class="page-header">
-  <h1>Master Subject</h1>
+  <h1>รายวิชา</h1>
   <p class="hint">กำหนดรายวิชา Section เวลาเรียน และเกณฑ์การมาสาย</p>
 </div>
 
+<div class="card">
+  <h2>Import Subject</h2>
+  <p class="hint">นำเข้ารายวิชาจากไฟล์ Excel (.xlsx)</p>
+
+  <form method="POST" action="{{ url_for('subjects_import') }}" enctype="multipart/form-data" class="form-grid">
+
+    <div class="field full-width">
+      <label for="subject_file">ไฟล์ Excel <span style="color: red;">*</span></label>
+      <input type="file" id="subject_file" name="subject_file" accept=".xlsx" required>
+      <small class="hint">
+        ไฟล์ต้องมีคอลัมน์ code, name, section_id, class_days,
+        start_time, end_time และ late_after_minutes
+      </small>
+    </div>
+
+    <div class="field submit">
+      <button type="submit" {% if not sections %}disabled{% endif %}>
+        Import Subject
+      </button>
+    </div>
+  </form>
+</div>
 <div class="card">
   <h2>เพิ่มรายวิชา</h2>
   {% if not sections %}
@@ -13,15 +35,15 @@
   {% endif %}
   <form method="POST" class="form-grid">
     <div class="field">
-      <label>รหัสวิชา (ไม่บังคับ)</label>
-      <input name="code" placeholder="เช่น EE101">
+      <label>รหัสวิชา <span style="color: red;">*</span></label>
+      <input type="text" name="code" placeholder="กรอกรหัสวิชา" required>
     </div>
     <div class="field">
       <label>ชื่อวิชา</label>
-      <input name="name" required placeholder="เช่น วงจรไฟฟ้า">
+      <input name="name" required placeholder="ชื่อวิชา">
     </div>
-    <div class="field">
-      <label>Section</label>
+    <div class="field full-width">
+      <label>Section <span style="color: red;">*</span></label>
       <select name="section_id" required>
         <option value="">-- เลือก Section --</option>
         {% for section in sections %}
@@ -29,18 +51,46 @@
         {% endfor %}
       </select>
     </div>
-    <div class="field">
-      <label>เวลาเริ่มเรียน</label>
-      <input type="time" name="start_time" required>
+    <div class="field full-width">
+      <label>วันเรียน (เลือกได้มากกว่า 1 วัน)</label>
+      <div class="days-checkbox">
+        {% for day_value, day_label in [
+        ('Monday', 'วันจันทร์'),
+        ('Tuesday', 'วันอังคาร'),
+        ('Wednesday', 'วันพุธ'),
+        ('Thursday', 'วันพฤหัสบดี'),
+        ('Friday', 'วันศุกร์'),
+        ('Saturday', 'วันเสาร์'),
+        ('Sunday', 'วันอาทิตย์')
+        ] %}
+        <label>
+          <input type="checkbox" name="class_days" value="{{ day_value }}">
+          {{ day_label }}
+        </label>
+        {% endfor %}
+      </div>
     </div>
+
     <div class="field">
-      <label>เวลาเลิกเรียน</label>
-      <input type="time" name="end_time" required>
+      <label>เวลาเริ่มเรียน <span style="color: red;">*</span></label>
+      <input type="text" name="start_time" class="time-input" placeholder="เวลาเริ่มเรียน" maxlength="5"
+        inputmode="numeric" autocomplete="off" required>
+      <small class="hint">กรอก 4 หลัก เช่น 0800 จะแสดงเป็น 08:00</small>
+    </div>
+
+    <div class="field">
+      <label>เวลาเลิกเรียน <span style="color: red;">*</span></label>
+      <input type="text" name="end_time" class="time-input" placeholder="เวลาเลิกเรียน" maxlength="5"
+        inputmode="numeric" autocomplete="off" required>
+      <small class="hint">กรอก 4 หลัก เช่น 1200 จะแสดงเป็น 12:00</small>
     </div>
     <div class="field">
       <label>อนุโลมก่อนถือว่าสาย (นาที)</label>
-      <input type="number" name="late_after_minutes" min="0" step="1" value="0" required>
-      <small class="hint">ตัวอย่าง: เริ่ม 09:00 และกำหนด 10 นาที จะถือว่าสายหลัง 09:10</small>
+      <input type="text" name="late_after_minutes" class="minutes-input" inputmode="numeric" pattern="[0-9]+"
+        maxlength="4" value="0" required>
+      <small class="hint">
+        กรอกได้เฉพาะตัวเลข 0 ขึ้นไป
+      </small>
     </div>
     <div class="field submit">
       <button type="submit" {% if not sections %}disabled{% endif %}>เพิ่มวิชา</button>
@@ -50,33 +100,110 @@
 
 <div class="card">
   <h2>รายการวิชา</h2>
-  <table>
-    <thead>
-      <tr>
-        <th>#</th><th>รหัสวิชา</th><th>ชื่อวิชา</th><th>Section</th>
-        <th>เวลาเริ่ม</th><th>เวลาเลิก</th><th>นาทีผ่อนผัน</th><th>จัดการ</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for subject in subjects %}
-      <tr>
-        <td>{{ loop.index }}</td>
-        <td>{{ subject.code or '-' }}</td>
-        <td>{{ subject.name }}</td>
-        <td>{{ subject.sections.name if subject.sections else '-' }}</td>
-        <td>{{ (subject.start_time|string)[:5] if subject.start_time else '-' }}</td>
-        <td>{{ (subject.end_time|string)[:5] if subject.end_time else '-' }}</td>
-        <td>{{ subject.late_after_minutes if subject.late_after_minutes is not none else 0 }}</td>
-        <td>
-          <form method="POST" action="{{ url_for('subjects_delete', subject_id=subject.id) }}" onsubmit="return confirm('ยืนยันลบวิชานี้?')">
-            <button type="submit" class="danger">ลบ</button>
-          </form>
-        </td>
-      </tr>
-      {% else %}
-      <tr><td colspan="8">ยังไม่มีข้อมูลรายวิชา</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
+
+  <div class="table-container">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>ลำดับ</th>
+          <th>รหัสวิชา</th>
+          <th>ชื่อวิชา</th>
+          <th>Section</th>
+          <th>วันเรียน</th>
+          <th>เวลาเริ่ม</th>
+          <th>เวลาเลิก</th>
+          <th>นาทีผ่อนผัน</th>
+          <th>จัดการ</th>
+        </tr>
+      </thead>
+
+      <tbody>
+        {% for subject in subjects %}
+        <tr>
+          <td>{{ loop.index }}</td>
+          <td>{{ subject.code or '-' }}</td>
+          <td>{{ subject.name }}</td>
+          <td>{{ subject.sections.name if subject.sections else '-' }}</td>
+
+          <td>
+            {% if subject.class_days %}
+            {% set day_names = {
+            'Monday': 'จันทร์',
+            'Tuesday': 'อังคาร',
+            'Wednesday': 'พุธ',
+            'Thursday': 'พฤหัสบดี',
+            'Friday': 'ศุกร์',
+            'Saturday': 'เสาร์',
+            'Sunday': 'อาทิตย์'
+            } %}
+            {% for day in subject.class_days %}
+            {{ day_names.get(day, day) }}{% if not loop.last %}, {% endif %}
+            {% endfor %}
+            {% else %}
+            -
+            {% endif %}
+          </td>
+
+          <td>{{ (subject.start_time|string)[:5] if subject.start_time else '-' }}</td>
+          <td>{{ (subject.end_time|string)[:5] if subject.end_time else '-' }}</td>
+          <td>{{ subject.late_after_minutes if subject.late_after_minutes is not none else 0 }}</td>
+
+          <td>
+            <div class="table-actions">
+              <a href="{{ url_for('subjects_edit', subject_id=subject.id) }}" class="btn-edit">
+                แก้ไข
+              </a>
+              <form method="POST" action="{{ url_for('subjects_delete', subject_id=subject.id) }}"
+                onsubmit="return confirm('ยืนยันลบวิชานี้?')">
+                <button type="submit" class="danger">ลบ</button>
+              </form>
+            </div>
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="9" class="empty-row">ยังไม่มีข้อมูลรายวิชา</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
 </div>
+<script>
+  document.querySelectorAll('.time-input').forEach(input => {
+    input.addEventListener('input', function () {
+      let value = this.value.replace(/\D/g, '').slice(0, 4);
+      if (value.length === 4) {
+        value = value.slice(0, 2) + ':' + value.slice(2);
+      }
+      this.value = value;
+    });
+
+    input.addEventListener('blur', function () {
+      const value = this.value.replace(/\D/g, '');
+
+      if (value.length !== 4) return;
+
+      const hour = Number(value.slice(0, 2));
+      const minute = Number(value.slice(2, 4));
+
+      if (hour > 23 || minute > 59) {
+        this.setCustomValidity('กรุณากรอกเวลาให้ถูกต้อง เช่น 0800 หรือ 1200');
+      } else {
+        this.setCustomValidity('');
+      }
+    });
+
+    input.addEventListener('input', function () {
+      this.setCustomValidity('');
+    });
+  });
+</script>
+<script>
+  document.querySelectorAll('.minutes-input').forEach(input => {
+    input.addEventListener('input', function () {
+      this.value = this.value.replace(/[^0-9]/g, '');
+    });
+  });
+</script>
 {% endblock %}

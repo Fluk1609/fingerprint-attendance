@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}จัดการผู้ใช้{% endblock %}
+{% block title %}Users{% endblock %}
 {% block content %}
 
 <div class="page-header">
@@ -27,16 +27,16 @@
   <h2>เพิ่มผู้ใช้ใหม่ / ลงทะเบียนลายนิ้วมือ</h2>
   <form method="POST" action="{{ url_for('users_add') }}" class="form-grid" id="userForm">
     <div class="field">
-      <label>รหัสนักศึกษา/บุคลากร</label>
-      <input type="text" name="student_id" id="student_id" required placeholder="เช่น 1001">
+      <label>รหัสนักศึกษา <span style="color: red;">*</span></label>
+      <input type="text" name="student_id" id="student_id" required placeholder="รหัสนักศึกษา">
     </div>
     <div class="field">
       <label>ชื่อ-นามสกุล</label>
-      <input type="text" name="full_name" required>
+      <input type="text" name="full_name" required placeholder="ชื่อ-นามสกุล">
     </div>
     <div class="field">
       <label>หน่วยงาน/คณะ/สาขา</label>
-      <input type="text" name="department">
+      <input type="text" name="department" placeholder="หน่วยงาน/คณะ/สาขา">
     </div>
     <div class="field">
       <label>Section</label>
@@ -47,11 +47,7 @@
         {% endfor %}
       </select>
     </div>
-    <div class="field">
-      <label>รหัสลายนิ้วมือ</label>
-      <input type="text" name="fingerprint_id" id="fingerprint_id" required readonly placeholder="ใช้รหัสนักศึกษา/บุคลากร">
-    </div>
-    <div class="field">
+    <div class="field full-width">
       <button type="button" id="enrollButton">ลงทะเบียนลายนิ้วมือ</button>
       <p id="enrollStatus" class="hint">กรุณากรอกข้อมูล แล้วกดลงทะเบียนลายนิ้วมือ</p>
     </div>

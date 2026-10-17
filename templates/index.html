@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}แดชบอร์ด{% endblock %}
+{% block title %}Dashboard{% endblock %}
 {% block content %}
 
 <div class="page-header">
@@ -8,30 +8,17 @@
 </div>
 
 <div class="card" style="margin-bottom: 1rem; padding: 1rem;">
-  <h2 style="margin-top: 0;">รายวิชาที่กำลังเช็กชื่อ</h2>
-  <form action="{{ url_for('set_active_subject') }}" method="POST" style="display:flex; gap:.75rem; align-items:end; flex-wrap:wrap;">
-    <div style="flex:1; min-width:240px;">
-      <label for="subject_id">เลือกรายวิชา</label>
-      <select name="subject_id" id="subject_id" required style="width:100%; padding:.65rem;">
-        <option value="">-- เลือกรายวิชา --</option>
-        {% for subject in subjects %}
-        <option value="{{ subject.id }}" {% if selected_subject_id|string == subject.id|string %}selected{% endif %}>
-          {{ subject.code or '' }} {{ subject.name }} (เริ่ม {{ subject.start_time }} / ผ่อนผัน {{ subject.late_after_minutes or 0 }} นาที)
-        </option>
-        {% endfor %}
-      </select>
-    </div>
-    <button type="submit">เริ่มเช็กชื่อ</button>
-  </form>
-  <form action="{{ url_for('set_active_subject') }}" method="POST" style="margin-top:.75rem;">
-    <input type="hidden" name="subject_id" value="">
-    <button type="submit" class="button-secondary">ยกเลิกรายวิชา</button>
-  </form>
-  {% if selected_subject_id %}
-    <p style="margin-bottom:0;">ระบบกำลังบันทึกการสแกนในรายวิชาที่เลือก</p>
-  {% else %}
-    <p style="margin-bottom:0;">ยังไม่ได้เลือกรายวิชา สแกนแล้วจะบันทึกเป็นสถานะ “พบข้อมูล” ตามเดิม</p>
-  {% endif %}
+  <h2 style="margin-top: 0;">รายวิชาปัจจุบัน</h2>
+  <div id="current-subject">
+    {% if active_subject %}
+      <p><strong>{{ active_subject.code or '' }} {{ active_subject.name }}</strong></p>
+      <p>เวลาเรียน: {{ (active_subject.start_time|string)[:5] }} - {{ (active_subject.end_time|string)[:5] }}</p>
+      <p>วันเรียน: {{ active_subject.class_days|join(', ') if active_subject.class_days else '-' }}</p>
+      <p class="hint">ระบบเลือกรายวิชาตามวันและเวลาโดยอัตโนมัติ</p>
+    {% else %}
+      <p class="hint">ขณะนี้ไม่มีรายวิชาที่ตรงกับวันและเวลา ระบบจะไม่บันทึกการสแกนเป็นการเข้าเรียนในรายวิชา</p>
+    {% endif %}
+  </div>
 </div>
 
 <div class="card">
@@ -61,6 +48,8 @@
             <span class="tag warn">มาสาย</span>
           {% elif log.status == 'matched' %}
             <span class="tag ok">พบข้อมูล</span>
+          {% elif log.status == 'no_class' %}
+            <span class="tag warn">ไม่มีวิชาในเวลานี้</span>
           {% else %}
             <span class="tag warn">ไม่พบผู้ใช้ ({{ log.fingerprint_id }})</span>
           {% endif %}
@@ -73,5 +62,65 @@
   </table>
 </div>
 
+<script>
+async function refreshCurrentSubject() {
+  const container = document.getElementById('current-subject');
+  if (!container) return;
+
+  try {
+    const response = await fetch('{{ url_for("api_current_subject") }}', {
+      cache: 'no-store'
+    });
+
+    if (!response.ok) return;
+
+    const data = await response.json();
+
+    if (!data.active) {
+      container.innerHTML = '<p class="hint">ขณะนี้ไม่มีรายวิชาที่ตรงกับวันและเวลา ระบบจะไม่บันทึกการสแกนเป็นการเข้าเรียนในรายวิชา</p>';
+      return;
+    }
+
+    const dayNames = {
+      Monday: 'จันทร์',
+      Tuesday: 'อังคาร',
+      Wednesday: 'พุธ',
+      Thursday: 'พฤหัสบดี',
+      Friday: 'ศุกร์',
+      Saturday: 'เสาร์',
+      Sunday: 'อาทิตย์'
+    };
+
+    const days = Array.isArray(data.class_days)
+      ? data.class_days
+          .map(day => dayNames[day] || day)
+          .join(', ')
+      : '-';
+
+    const title = `${data.code || ''} ${data.name || ''}`.trim();
+
+    container.innerHTML = `
+      <p><strong>${escapeHtml(title)}</strong></p>
+      <p>เวลาเรียน: ${escapeHtml(data.start_time)} - ${escapeHtml(data.end_time)}</p>
+      <p>วันเรียน: ${escapeHtml(days)}</p>
+      <p class="hint">ระบบเลือกรายวิชาตามวันและเวลาโดยอัตโนมัติ</p>
+    `;
+  } catch (error) {
+    console.error('อัปเดตรายวิชาปัจจุบันไม่สำเร็จ:', error);
+  }
+}
+
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, char => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;'
+  })[char]);
+}
+refreshCurrentSubject();
+setInterval(refreshCurrentSubject, 5000);
+</script>
 <script src="{{ url_for('static', filename='script.js') }}"></script>
 {% endblock %}

@@ -1,28 +1,11 @@
-"""
-app.py
-------
-เว็บแอปหลักของระบบเช็คชื่อด้วยลายนิ้วมือ (Flask)
-
-หน้าเว็บ:
-  /              แดชบอร์ด - ดูรายการสแกนล่าสุดแบบเรียลไทม์
-  /users         จัดการผู้ใช้งาน
-  /reports       รายงาน + ดาวน์โหลด Excel
-
-API:
-  POST /api/scan
-  GET  /api/scans/recent
-  GET  /reports/export
-
-Run:
-  uvicorn app:asgi_app --host 0.0.0.0 --port 5000 --reload
-"""
 from openpyxl import load_workbook
+from io import BytesIO
 import threading
 import queue
 import base64
 import time
-from pyzkfp import ZKFP2
 import uuid
+from pyzkfp import ZKFP2
 from flask import (
     Flask,
     render_template,
@@ -36,21 +19,13 @@ from flask import (
 
 from asgiref.wsgi import WsgiToAsgi
 
-import io
-
 import database as db
 from report import build_excel_report
-from datetime import datetime, date, timedelta, timezone
+from datetime import datetime, date, timedelta, timezone, time as datetime_time
 
 THAI_TZ = timezone(timedelta(hours=7))
 
-
-# =========================================================
-# Flask App
-# =========================================================
-
 app = Flask(__name__)
-
 app.secret_key = "change-this-secret-key"
 
 @app.template_filter("datetime_format_th")
@@ -58,23 +33,14 @@ def datetime_format_th(value):
     if not value:
         return "-"
 
-    try:
-        if isinstance(value, str):
-            value = datetime.fromisoformat(
-                value.replace("Z", "+00:00")
-            )
-
-        if value.tzinfo is None:
-            value = value.replace(tzinfo=timezone.utc)
-
-        value = value.astimezone(
-            timezone(timedelta(hours=7))
+    if isinstance(value, str):
+        value = datetime.fromisoformat(
+            value.replace("Z", "+00:00")
         )
-
-        return value.strftime("%d/%m/%Y : %H:%M")
-
-    except (ValueError, TypeError):
-        return str(value)
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    value = value.astimezone(THAI_TZ)
+    return value.strftime("%d/%m/%Y : %H:%M")
 
 
 @app.template_filter("datetime_format")
@@ -104,12 +70,6 @@ def delete_fingerprint_template(fingerprint_id):
         print(f"[SCANNER] ล้าง Template ใน Supabase ไม่สำเร็จ: {exc}")
         raise
 
-
-
-# =========================================================
-# Supabase
-# =========================================================
-
 db.init_db()
 
 scanner_queue = queue.Queue()
@@ -126,29 +86,184 @@ enrollment_lock = threading.Lock()
 
 active_subject_id = None
 active_subject_lock = threading.Lock()
-# =========================================================
-# Dashboard
-# =========================================================
+
+def get_current_subject(now=None):
+    now = now or datetime.now(THAI_TZ)
+
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=THAI_TZ)
+    else:
+        now = now.astimezone(THAI_TZ)
+
+    response = (
+        db.supabase.table("subjects")
+        .select(
+            "id, code, name, class_days, "
+            "start_time, end_time, late_after_minutes"
+        )
+        .execute()
+    )
+
+    weekday = now.strftime("%A")
+    current_time = now.time().replace(tzinfo=None)
+
+    matches = []
+
+    for subject in response.data or []:
+        class_days = subject.get("class_days") or []
+
+        if isinstance(class_days, str):
+            class_days = [
+                day.strip()
+                for day in class_days.split(",")
+                if day.strip()
+            ]
+
+        class_days = [
+            str(day).strip().capitalize()
+            for day in class_days
+        ]
+
+        print(
+            f"[SUBJECT DEBUG] วิชา={subject.get('name')}, "
+            f"วันเรียน={class_days}, วันปัจจุบัน={weekday}"
+        )
+
+        if weekday not in class_days:
+            continue
+
+        try:
+            start_text = str(subject.get("start_time") or "").strip()
+            end_text = str(subject.get("end_time") or "").strip()
+
+            start_time = datetime.strptime(
+                start_text[:8],
+                "%H:%M:%S" if len(start_text) >= 8 else "%H:%M"
+            ).time()
+
+            end_time = datetime.strptime(
+                end_text[:8],
+                "%H:%M:%S" if len(end_text) >= 8 else "%H:%M"
+            ).time()
+
+        except ValueError as error:
+            print(
+                f"[SUBJECT DEBUG] เวลาไม่ถูกต้อง "
+                f"วิชา={subject.get('name')}: {error}"
+            )
+            continue
+
+        print(
+            f"[SUBJECT DEBUG] วิชา={subject.get('name')}, "
+            f"เวลาเรียน={start_time}-{end_time}, "
+            f"เวลาปัจจุบัน={current_time}"
+        )
+
+        if start_time <= current_time <= end_time:
+            matches.append(subject)
+
+    if len(matches) == 1:
+        return matches[0]
+
+    if len(matches) > 1:
+        print(
+            "[SUBJECT DEBUG] พบวิชาที่เวลาเรียนทับซ้อนกัน: "
+            + ", ".join(str(x.get("name")) for x in matches)
+        )
+        matches.sort(
+            key=lambda subject: str(subject.get("start_time") or ""),
+            reverse=True
+        )
+
+        selected = matches[0]
+
+        print(
+            f"[SUBJECT DEBUG] เลือกวิชา: {selected.get('name')} "
+            f"เวลาเริ่ม {selected.get('start_time')}"
+        )
+
+        return selected
+
+    return None
+
+def current_subject_id():
+    subject = get_current_subject()
+    return subject.get("id") if subject else None
+
 
 @app.route("/")
 def dashboard():
-    logs = db.get_recent_logs(limit=50)
-    subjects = _master_list("subjects", "name")
+    today = datetime.now(THAI_TZ).date()
+    start_of_day = datetime.combine(
+        today, datetime.min.time(), tzinfo=THAI_TZ
+    )
+    start_of_tomorrow = datetime.combine(
+        today + timedelta(days=1),
+        datetime.min.time(),
+        tzinfo=THAI_TZ
+    )
+    start_utc = start_of_day.astimezone(timezone.utc)
+    end_utc = start_of_tomorrow.astimezone(timezone.utc)
+    response = (
+        db.supabase.table("scan_logs")
+        .select("""
+            id, scanned_at, status, fingerprint_id, subject_id,
+            users (student_id, full_name, department),
+            subjects (id, code, name)
+        """)
+        .gte("scanned_at", start_utc.isoformat())
+        .lt("scanned_at", end_utc.isoformat())
+        .order("scanned_at", desc=True)
+        .limit(50)
+        .execute()
+    )
 
-    with active_subject_lock:
-        selected_subject_id = active_subject_id
+    logs = []
+    for row in response.data or []:
+        user = row.get("users") or {}
+        subject = row.get("subjects") or {}
+
+        logs.append({
+            "id": row.get("id"),
+            "scanned_at": row.get("scanned_at"),
+            "status": row.get("status"),
+            "fingerprint_id": row.get("fingerprint_id"),
+            "student_id": user.get("student_id"),
+            "full_name": user.get("full_name"),
+            "department": user.get("department"),
+            "subject_id": row.get("subject_id"),
+            "subject_code": subject.get("code"),
+            "subject_name": subject.get("name"),
+        })
+
+    active_subject = get_current_subject()
 
     return render_template(
         "index.html",
         logs=logs,
-        subjects=subjects,
-        selected_subject_id=selected_subject_id,
+        active_subject=active_subject,
     )
+
+
+@app.route("/api/current-subject")
+def api_current_subject():
+    subject = get_current_subject()
+    if not subject:
+        return jsonify({"active": False})
+    return jsonify({
+        "active": True,
+        "id": subject.get("id"),
+        "code": subject.get("code"),
+        "name": subject.get("name"),
+        "class_days": subject.get("class_days") or [],
+        "start_time": str(subject.get("start_time") or "")[:5],
+        "end_time": str(subject.get("end_time") or "")[:5],
+        "late_after_minutes": subject.get("late_after_minutes") or 0,
+    })
 
 
 @app.route("/attendance/subject", methods=["POST"])
 def set_active_subject():
-    """กำหนดรายวิชาที่กำลังเช็กชื่อ"""
     global active_subject_id
     subject_id_raw = (request.form.get("subject_id") or "").strip()
 
@@ -199,11 +314,6 @@ def api_recent_scans():
     ])
 
 
-# =========================================================
-# API Scan
-# =========================================================
-
-
 @app.route("/api/scan", methods=["POST"])
 def api_scan():
     payload = request.get_json(silent=True) or {}
@@ -221,12 +331,13 @@ def api_scan():
             "error": "ต้องระบุ fingerprint_id"
         }), 400
 
-    # ค้นหาผู้ใช้จาก fingerprint_id
     user = db.get_user_by_fingerprint(fingerprint_id)
 
-    # อ่านรายวิชาที่กำลังเช็กชื่อ
-    with active_subject_lock:
-        subject_id = active_subject_id
+    scan_dt = datetime.fromisoformat(str(scanned_at).replace("Z", "+00:00"))
+    if scan_dt.tzinfo is None:
+        scan_dt = scan_dt.replace(tzinfo=THAI_TZ)
+    subject = get_current_subject(scan_dt)
+    subject_id = subject.get("id") if subject else None
 
     print(
         f"[SCAN DEBUG] fingerprint_id={fingerprint_id}, "
@@ -234,7 +345,6 @@ def api_scan():
         f"scanned_at={scanned_at}"
     )
 
-    # กรณีพบผู้ใช้
     if user:
         attendance_status = None
 
@@ -250,11 +360,7 @@ def api_scan():
             f"attendance_status={attendance_status}"
         )
 
-        # สถานะการเข้าเรียน
-        # on_time = ตรงเวลา
-        # late = มาสาย
-        # matched = พบผู้ใช้ แต่ยังไม่มีสถานะเข้าเรียน
-        log_status = attendance_status or "matched"
+        log_status = attendance_status or "no_class"
 
         db.add_scan_log(
             fingerprint_id,
@@ -274,7 +380,6 @@ def api_scan():
             "scanned_at": scanned_at,
         }), 200
 
-    # กรณีไม่พบผู้ใช้
     db.add_scan_log(
         fingerprint_id,
         None,
@@ -291,15 +396,11 @@ def api_scan():
         "scanned_at": scanned_at,
     }), 200
 
-# Users
-# =========================================================
-
 @app.route("/users")
 def users_page():
     users = db.get_all_users()
     sections = _master_list("sections", "name")
 
-    # แสดงชื่อ Section จาก Master โดยไม่ต้องเก็บชื่อซ้ำใน users
     for user in users:
         section_id = user.get("section_id")
         section = next(
@@ -339,7 +440,6 @@ def users_add():
     ).strip()
 
     section_id_raw = (request.form.get("section_id") or "").strip()
-    # รองรับฟอร์มเดิมที่ยังส่งชื่อ Section มา
     section_name = (request.form.get("section") or "").strip()
     section_id = None
 
@@ -361,10 +461,6 @@ def users_add():
             return redirect(url_for("users_page"))
         section_id = int(matched["id"])
 
-    # -----------------------------------------------------
-    # Validate
-    # -----------------------------------------------------
-
     if not (
         student_id
         and full_name
@@ -380,10 +476,6 @@ def users_add():
         return redirect(
             url_for("users_page")
         )
-
-    # -----------------------------------------------------
-    # Add User
-    # -----------------------------------------------------
 
     try:
 
@@ -418,6 +510,7 @@ def users_add():
     )
 
 
+
 @app.route("/users/import-excel", methods=["POST"])
 def users_import_excel():
     file = request.files.get("excel_file")
@@ -430,6 +523,8 @@ def users_import_excel():
         flash("รองรับไฟล์ .xlsx หรือ .xlsm เท่านั้น", "error")
         return redirect(url_for("users_page"))
 
+    workbook = None
+
     try:
         workbook = load_workbook(
             file,
@@ -438,87 +533,172 @@ def users_import_excel():
         )
         sheet = workbook.active
 
-        # อ่านชื่อคอลัมน์จากแถวแรก
+        header_values = next(
+            sheet.iter_rows(min_row=1, max_row=1, values_only=True),
+            None
+        )
+
+        if not header_values:
+            raise ValueError("ไฟล์ Excel ไม่มีหัวคอลัมน์")
+
         headers = [
-            str(cell.value or "").strip().lower()
-            for cell in next(sheet.iter_rows())
+            str(value or "").strip().lower()
+            for value in header_values
         ]
 
-        required = ["student_id", "full_name", "department"]
+        required = [
+            "student_id",
+            "full_name",
+            "department",
+            "section"
+        ]
+
         missing = [name for name in required if name not in headers]
 
         if missing:
-            flash(
-                "ไม่พบคอลัมน์: " + ", ".join(missing),
-                "error"
+            raise ValueError(
+                "ไม่พบคอลัมน์: " + ", ".join(missing)
             )
-            workbook.close()
-            return redirect(url_for("users_page"))
 
-        # โหลด Master Section ครั้งเดียว แล้วจับคู่ชื่อจาก Excel เป็น section_id
-        section_response = db.supabase.table("sections").select("id,name").execute()
+        section_response = (
+            db.supabase.table("sections")
+            .select("id,name")
+            .execute()
+        )
+
         section_map = {
-            str(item.get("name", "")).strip().casefold(): int(item["id"])
+            str(item["name"]).strip().casefold(): int(item["id"])
             for item in (section_response.data or [])
             if item.get("name") and item.get("id") is not None
         }
 
         rows = []
         row_errors = []
+        seen_student_ids = set()
 
         for excel_row_number, values in enumerate(
-            sheet.iter_rows(min_row=2, values_only=True), start=2
+            sheet.iter_rows(min_row=2, values_only=True),
+            start=2
         ):
             row = dict(zip(headers, values))
 
-            student_id = str(row.get("student_id") or "").strip()
+            if not any(value is not None for value in values):
+                continue
+
+            raw_student_id = row.get("student_id")
             full_name = str(row.get("full_name") or "").strip()
             department = str(row.get("department") or "").strip()
             section_name = str(row.get("section") or "").strip()
 
-            if not student_id and not full_name and not department and not section_name:
+            student_id = str(raw_student_id or "").strip()
+            if student_id.endswith(".0"):
+                student_id = student_id[:-2]
+
+            if not student_id or not full_name or not department:
+                row_errors.append({
+                    "row": excel_row_number,
+                    "message": "ข้อมูล student_id, full_name หรือ department ไม่ครบ"
+                })
                 continue
 
+            if not student_id.isdigit():
+                row_errors.append({
+                    "row": excel_row_number,
+                    "message": f"student_id '{student_id}' ต้องเป็นตัวเลข"
+                })
+                continue
+
+            if student_id in seen_student_ids:
+                row_errors.append({
+                    "row": excel_row_number,
+                    "message": f"student_id '{student_id}' ซ้ำในไฟล์"
+                })
+                continue
+
+            seen_student_ids.add(student_id)
+
+            normalized_section = section_name.casefold()
+            if normalized_section.startswith("section "):
+                normalized_section = normalized_section[len("section "):].strip()
+
             section_id = None
-            if section_name:
+
+            if normalized_section:
                 section_id = section_map.get(section_name.casefold())
+
+                if section_id is None and normalized_section.isdigit():
+                    candidate_id = int(normalized_section)
+                    if candidate_id in section_map.values():
+                        section_id = candidate_id
+
                 if section_id is None:
                     row_errors.append({
                         "row": excel_row_number,
-                        "message": f"ไม่พบ Section '{section_name}' ใน Master Section",
+                        "message": f"ไม่พบ Section '{section_name}' ใน Master Section"
                     })
                     continue
 
+            else:
+                row_errors.append({
+                    "row": excel_row_number,
+                    "message": "กรุณาระบุ section"
+                })
+                continue
+
             rows.append({
-                "student_id": student_id,
+                "student_id": int(student_id),
                 "full_name": full_name,
                 "department": department,
                 "section_id": section_id,
             })
 
-        workbook.close()
+        if not rows:
+            flash(
+                "ไม่มีข้อมูลที่สามารถนำเข้าได้"
+                + (
+                    f" พบข้อผิดพลาด {len(row_errors)} รายการ"
+                    if row_errors else ""
+                ),
+                "error"
+            )
+            for error in row_errors[:10]:
+                flash(
+                    f"แถว {error['row']}: {error['message']}",
+                    "error"
+                )
+            return redirect(url_for("users_page"))
 
         result = db.import_users_from_excel(rows)
+
+        result.setdefault("inserted", 0)
+        result.setdefault("updated", 0)
+        result.setdefault("skipped", 0)
         result.setdefault("errors", [])
-        result["errors"] = row_errors + result["errors"]
+
+        all_errors = row_errors + result["errors"]
 
         flash(
             f"เพิ่มใหม่ {result['inserted']} คน, "
-            f"อัปเดตข้อมูลเดิม {result.get('updated', 0)} คน, "
+            f"อัปเดตข้อมูลเดิม {result['updated']} คน, "
             f"ข้าม {result['skipped']} คน, "
-            f"ผิดพลาด {len(result['errors'])} รายการ",
-            "success" if not result["errors"] else "error"
+            f"ผิดพลาด {len(all_errors)} รายการ",
+            "success" if not all_errors else "error"
         )
 
-        for error in result["errors"][:10]:
-            print(
-                f"[IMPORT EXCEL] แถว {error['row']}: "
-                f"{error['message']}"
+        for error in all_errors[:10]:
+            flash(
+                f"แถว {error.get('row', '?')}: "
+                f"{error.get('message', 'เกิดข้อผิดพลาด')}",
+                "error"
             )
 
     except Exception as exc:
-        print(f"[IMPORT EXCEL ERROR] {exc}")
+        app.logger.exception("Import Excel failed")
         flash(f"นำเข้า Excel ไม่สำเร็จ: {exc}", "error")
+
+    finally:
+        if workbook is not None:
+            workbook.close()
 
     return redirect(url_for("users_page"))
 
@@ -527,23 +707,19 @@ def users_import_excel():
 @app.route("/users/delete/<int:user_id>", methods=["POST"])
 def users_delete(user_id):
     try:
-        # ค้นหาผู้ใช้ก่อนลบ
         users = db.get_all_users()
         user = next(
             (u for u in users if int(u["id"]) == user_id),
             None,
         )
-
         if not user:
             flash("ไม่พบผู้ใช้ที่ต้องการลบ", "error")
             return redirect(url_for("users_page"))
 
         fingerprint_id = user.get("fingerprint_id")
 
-        # ลบผู้ใช้จาก Supabase ก่อน
         db.delete_user(user_id)
 
-        # เมื่อลบผู้ใช้สำเร็จ จึงลบ Template จาก JSON
         if fingerprint_id:
             delete_fingerprint_template(fingerprint_id)
 
@@ -554,16 +730,6 @@ def users_delete(user_id):
         flash(f"ลบผู้ใช้ไม่สำเร็จ: {exc}", "error")
 
     return redirect(url_for("users_page"))
-
-# =========================================================
-# Reports
-# =========================================================
-
-
-
-# =========================================================
-# Master Data: Sections and Subjects
-# =========================================================
 
 def _master_list(table, order_column):
     response = db.supabase.table(table).select("*").order(order_column).execute()
@@ -601,58 +767,196 @@ def sections_delete(section_id):
 @app.route("/masters/subjects", methods=["GET", "POST"])
 def subjects_page():
     if request.method == "POST":
-        code = (request.form.get("code") or "").strip() or None
-        name = (request.form.get("name") or "").strip()
-        section_id_raw = (request.form.get("section_id") or "").strip()
-        start_time = (request.form.get("start_time") or "").strip() or None
-        end_time = (request.form.get("end_time") or "").strip() or None
-        late_after_raw = (request.form.get("late_after_minutes") or "0").strip()
+        try:
+            code = request.form.get("code", "").strip() or None
+            name = request.form.get("name", "").strip()
+            section_id = request.form.get("section_id")
+            class_days = request.form.getlist("class_days")
+            start_time = request.form.get("start_time")
+            end_time = request.form.get("end_time")
+            late_after_minutes = request.form.get("late_after_minutes", "0")
 
-        if not name:
-            flash("กรุณากรอกชื่อวิชา", "error")
-        elif not section_id_raw:
-            flash("กรุณาเลือก Section", "error")
-        elif not start_time or not end_time:
-            flash("กรุณาระบุเวลาเริ่มเรียนและเวลาเลิกเรียน", "error")
-        else:
-            try:
-                section_id = int(section_id_raw)
-                late_after_minutes = max(0, int(late_after_raw or "0"))
-                payload = {
-                    "code": code,
-                    "name": name,
-                    "section_id": section_id,
-                    "start_time": start_time,
-                    "end_time": end_time,
-                    "late_after_minutes": late_after_minutes,
-                }
-                db.supabase.table("subjects").insert(payload).execute()
-                flash("เพิ่มวิชาและกำหนดเวลาเรียนสำเร็จ", "success")
-            except Exception as exc:
-                flash(f"เพิ่มวิชาไม่สำเร็จ: {exc}", "error")
+            if not name or not section_id:
+                flash("กรุณากรอกชื่อวิชาและเลือก Section", "error")
+                return redirect(url_for("subjects_page"))
+
+            payload = {
+                "code": code,
+                "name": name,
+                "section_id": int(section_id),
+                "class_days": class_days,
+                "start_time": start_time,
+                "end_time": end_time,
+                "late_after_minutes": int(late_after_minutes),
+            }
+
+            result = (
+                db.supabase
+                .table("subjects")
+                .insert(payload)
+                .execute()
+            )
+
+            print("เพิ่มวิชาสำเร็จ:", result.data)
+            flash("เพิ่มวิชาเรียบร้อยแล้ว", "success")
+
+        except Exception as e:
+            print("เพิ่มวิชาไม่สำเร็จ:", repr(e))
+            flash(f"เพิ่มวิชาไม่สำเร็จ: {e}", "error")
+
         return redirect(url_for("subjects_page"))
 
-    try:
-        sections = _master_list("sections", "name")
-    except Exception as exc:
-        sections = []
-        flash("อ่านตาราง sections ไม่สำเร็จ กรุณารัน SQL สำหรับ Master Data ก่อน: " + str(exc), "error")
-    try:
-        subjects = db.supabase.table("subjects").select("*, sections(name)").order("name").execute().data or []
-    except Exception as exc:
-        subjects = []
-        flash("อ่านตาราง subjects ไม่สำเร็จ กรุณารัน SQL อัปเดตตารางก่อน: " + str(exc), "error")
-    return render_template("subjects.html", subjects=subjects, sections=sections)
+    subjects_result = (
+        db.supabase
+        .table("subjects")
+        .select("*, sections(name)")
+        .order("id")
+        .execute()
+    )
 
-@app.route("/masters/subjects/<int:subject_id>/delete", methods=["POST"])
+    sections_result = (
+        db.supabase
+        .table("sections")
+        .select("*")
+        .order("id")
+        .execute()
+    )
+
+    return render_template(
+        "subjects.html",
+        subjects=subjects_result.data or [],
+        sections=sections_result.data or [],
+    )
+
+
+@app.route("/masters/subjects/edit/<int:subject_id>", methods=["GET", "POST"])
+def subjects_edit(subject_id):
+    try:
+        if request.method == "POST":
+            code = request.form.get("code", "").strip()
+            name = request.form.get("name", "").strip()
+            section_id = request.form.get("section_id", "").strip()
+            class_days = request.form.getlist("class_days")
+            start_time = request.form.get("start_time", "").strip()
+            end_time = request.form.get("end_time", "").strip()
+            late_after_minutes = request.form.get("late_after_minutes", "0").strip()
+
+            if not code or not name or not section_id or not start_time or not end_time:
+                flash("กรุณากรอกข้อมูลให้ครบถ้วน", "error")
+                return redirect(url_for("subjects_edit", subject_id=subject_id))
+
+            try:
+                section_id = int(section_id)
+                late_after_minutes = int(late_after_minutes)
+
+                if late_after_minutes < 0:
+                    raise ValueError("นาทีผ่อนผันต้องไม่ติดลบ")
+
+                for time_value in (start_time, end_time):
+                    hour, minute = map(int, time_value.split(":"))
+                    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+                        raise ValueError("รูปแบบเวลาไม่ถูกต้อง")
+
+            except (ValueError, TypeError):
+                flash("กรุณาตรวจสอบ Section เวลาเรียน และนาทีผ่อนผัน", "error")
+                return redirect(url_for("subjects_edit", subject_id=subject_id))
+
+            payload = {
+                "code": code,
+                "name": name,
+                "section_id": section_id,
+                "class_days": class_days,
+                "start_time": start_time,
+                "end_time": end_time,
+                "late_after_minutes": late_after_minutes,
+            }
+
+            result = (
+                db.supabase
+                .table("subjects")
+                .update(payload)
+                .eq("id", subject_id)
+                .execute()
+            )
+
+            if not result.data:
+                flash("ไม่พบรายวิชาที่ต้องการแก้ไข", "error")
+                return redirect(url_for("subjects_page"))
+
+            flash("แก้ไขรายวิชาเรียบร้อยแล้ว", "success")
+            return redirect(url_for("subjects_page"))
+
+        subject_result = (
+            db.supabase
+            .table("subjects")
+            .select("*")
+            .eq("id", subject_id)
+            .execute()
+        )
+
+        if not subject_result.data:
+            flash("ไม่พบรายวิชาที่ต้องการแก้ไข", "error")
+            return redirect(url_for("subjects_page"))
+
+        sections_result = (
+            db.supabase
+            .table("sections")
+            .select("*")
+            .order("id")
+            .execute()
+        )
+
+        return render_template(
+            "subjects_edit.html",
+            subject=subject_result.data[0],
+            sections=sections_result.data or [],
+        )
+
+    except Exception as e:
+        print(f"แก้ไขวิชาไม่สำเร็จ: {repr(e)}")
+        flash(f"แก้ไขวิชาไม่สำเร็จ: {e}", "error")
+        return redirect(url_for("subjects_page"))
+
+
+@app.route("/masters/subjects/delete/<int:subject_id>", methods=["POST"])
 def subjects_delete(subject_id):
     try:
-        db.supabase.table("subjects").delete().eq("id", subject_id).execute()
-        flash("ลบวิชาสำเร็จ", "success")
-    except Exception as exc:
-        flash(f"ลบวิชาไม่สำเร็จ: {exc}", "error")
+        db.supabase.table("scan_logs") \
+            .delete() \
+            .eq("subject_id", subject_id) \
+            .execute()
+
+        db.supabase.table("subjects") \
+            .delete() \
+            .eq("id", subject_id) \
+            .execute()
+
+        flash("ลบวิชาและประวัติการสแกนเรียบร้อยแล้ว", "success")
+
+    except Exception as e:
+        print(f"ลบวิชาไม่สำเร็จ: {e}")
+        flash(f"ลบวิชาไม่สำเร็จ: {e}", "error")
+
     return redirect(url_for("subjects_page"))
 
+
+@app.route("/masters/subjects/delete/<int:subject_id>", methods=["POST"])
+def delete_subject(subject_id):
+    try:
+        db.supabase.table("scan_logs") \
+            .delete() \
+            .eq("subject_id", subject_id) \
+            .execute()
+        db.supabase.table("subjects") \
+            .delete() \
+            .eq("id", subject_id) \
+            .execute()
+        flash("ลบวิชาและประวัติการสแกนเรียบร้อยแล้ว", "success")
+    except Exception as e:
+        print(f"ลบวิชาไม่สำเร็จ: {e}")
+        flash("ลบวิชาไม่สำเร็จ", "error")
+
+    return redirect(url_for("subjects_page"))
 
 @app.route("/reports")
 def reports_page():
@@ -680,10 +984,6 @@ def reports_page():
         or None
     )
 
-    # -----------------------------------------------------
-    # Get Logs
-    # -----------------------------------------------------
-
     logs = db.get_logs_in_range(
         start_date,
         end_date,
@@ -691,10 +991,6 @@ def reports_page():
     )
 
     users = db.get_all_users()
-
-    # -----------------------------------------------------
-    # Summary
-    # -----------------------------------------------------
 
     summary = {}
 
@@ -742,10 +1038,6 @@ def reports_page():
     )
 
 
-# =========================================================
-# Export Excel
-# =========================================================
-
 @app.route("/reports/export")
 def reports_export():
 
@@ -768,19 +1060,11 @@ def reports_export():
         or None
     )
 
-    # -----------------------------------------------------
-    # Get Logs
-    # -----------------------------------------------------
-
     logs = db.get_logs_in_range(
         start_date,
         end_date,
         user_id,
     )
-
-    # -----------------------------------------------------
-    # Build Excel
-    # -----------------------------------------------------
 
     excel_bytes = build_excel_report(
         logs,
@@ -794,20 +1078,14 @@ def reports_export():
     )
 
     return send_file(
-        io.BytesIO(excel_bytes),
-
+        BytesIO(excel_bytes),
         mimetype=(
             "application/vnd.openxmlformats-"
             "officedocument.spreadsheetml.sheet"
         ),
-
         as_attachment=True,
-
         download_name=filename,
     )
-
-
-
 
 @app.route("/api/enroll", methods=["POST"])
 def api_enroll():
@@ -820,7 +1098,6 @@ def api_enroll():
             "error": "รหัสลายนิ้วมือต้องเป็นตัวเลข"
         }), 400
 
-    # ถ้ามี Template อยู่แล้ว ต้องให้หน้าเว็บถามผู้ใช้ก่อนส่ง replace_existing=True
     try:
         has_template = db.has_fingerprint_template(fingerprint_id)
     except AttributeError:
@@ -934,16 +1211,8 @@ def api_enroll_reset():
         "message": "ยกเลิกงานลงทะเบียนที่ค้างแล้ว"
     })
 
-# =========================================================
-# WSGI → ASGI
-# =========================================================
-
 
 def get_attendance_status(subject_id, scanned_at):
-    """
-    คืนค่า on_time หรือ late ตามเวลาเริ่มเรียนและนาทีผ่อนผันของรายวิชา
-    คืน None หากยังไม่ได้เลือกรายวิชา หรือไม่มีข้อมูลเวลาเริ่มเรียน
-    """
     if subject_id is None or str(subject_id).strip() == "":
         return None
 
@@ -967,8 +1236,6 @@ def get_attendance_status(subject_id, scanned_at):
             "ไม่มี start_time"
         )
         return None
-
-    # รองรับเวลาจากฐานข้อมูลทั้งรูปแบบ HH:MM และ HH:MM:SS
     start_time_text = str(start_time_value).strip()
     parsed_start_time = None
     for time_format in ("%H:%M:%S", "%H:%M"):
@@ -1036,7 +1303,6 @@ def scanner_worker():
     last_time = 0.0
 
     def capture_template():
-        # รอจนกว่าจะมีการวางนิ้ว
         while True:
             result = zk.AcquireFingerprint()
 
@@ -1098,7 +1364,6 @@ def scanner_worker():
 
             if merged_length and len(merged) != int(merged_length):
                 raise RuntimeError("ความยาว Template ไม่ถูกต้อง")
-            # บันทึก Supabase ก่อน แล้วอัปเดต SDK; เก็บ Template เดิมไว้เผื่อ rollback
             template_base64 = base64.b64encode(merged).decode("ascii")
             db.update_fingerprint_template(fingerprint_id, template_base64)
 
@@ -1106,13 +1371,11 @@ def scanner_worker():
                 try:
                     zk.DBDel(fid)
                 except Exception:
-                    # DBDel อาจแจ้ง error เมื่อไม่มี ID อยู่ใน SDK
                     pass
 
                 zk.DBAdd(fid, merged)
                 templates[fingerprint_id] = merged
             except Exception:
-                # ถ้า SDK อัปเดตไม่สำเร็จ ให้คืน Template เดิมใน SDK หากมี
                 try:
                     zk.DBDel(fid)
                 except Exception:
@@ -1156,7 +1419,6 @@ def scanner_worker():
         zk.OpenDevice(0)
         opened = True
 
-        # โหลด Template จาก Supabase เท่านั้น ไม่ใช้ fingerprint_templates.json
         loaded_templates = db.get_all_fingerprint_templates() or {}
         templates = {}
 
@@ -1165,7 +1427,6 @@ def scanner_worker():
                 continue
 
             if isinstance(template, str):
-                # รองรับกรณี database.py คืนค่า Base64 string
                 template_bytes = base64.b64decode(template, validate=True)
             else:
                 template_bytes = bytes(template)
@@ -1185,9 +1446,6 @@ def scanner_worker():
             try:
                 zk.DBAdd(int(normalized_id), template_bytes)
                 templates[normalized_id] = template_bytes
-                print(
-                    f"[SCANNER] โหลด Template {normalized_id} สำเร็จ"
-                )
             except Exception as exc:
                 print(
                     f"[SCANNER ERROR] โหลด Template ไม่สำเร็จ: "
@@ -1199,7 +1457,6 @@ def scanner_worker():
 
         scanner_status["ready"] = True
         scanner_status["error"] = None
-        print("[SCANNER] เชื่อมต่อ ZK9500 สำเร็จ พร้อมใช้งาน")
 
         while True:
             try:
@@ -1213,7 +1470,6 @@ def scanner_worker():
                 finally:
                     scanner_queue.task_done()
 
-                # ให้กลับไปสแกนเช็กชื่อหลังลงทะเบียน
                 last_id = None
                 last_time = 0.0
                 continue
@@ -1245,20 +1501,17 @@ def scanner_worker():
                 ):
                     user = db.get_user_by_fingerprint(fingerprint_id)
 
-                    scanned_at = datetime.now().astimezone().isoformat(
-                        timespec="seconds"
-                    )
-
-                    with active_subject_lock:
-                        subject_id = active_subject_id
+                    scanned_at = datetime.now(THAI_TZ).isoformat(timespec="seconds")
+                    active_subject = get_current_subject(datetime.now(THAI_TZ))
+                    subject_id = active_subject.get("id") if active_subject else None
 
                     if user:
-                        attendance_status = get_attendance_status(
-                            subject_id,
-                            scanned_at
-                        )
-                        # matched หมายถึงพบผู้ใช้แต่ยังคำนวณสถานะเข้าเรียนไม่ได้
-                        log_status = attendance_status or "matched"
+                        if subject_id is None:
+                            attendance_status = None
+                            log_status = "no_class"
+                        else:
+                            attendance_status = get_attendance_status(subject_id, scanned_at)
+                            log_status = attendance_status or "no_class"
                     else:
                         attendance_status = None
                         log_status = "unmatched"
@@ -1303,6 +1556,226 @@ def scanner_worker():
 
         if initialized:
             zk.Terminate()
+
+@app.route("/masters/subjects/import", methods=["POST"])
+def subjects_import():
+    file = request.files.get("subject_file")
+
+    if not file or not file.filename:
+        flash("กรุณาเลือกไฟล์ Excel", "error")
+        return redirect(url_for("subjects_page"))
+
+    if not file.filename.lower().endswith(".xlsx"):
+        flash("รองรับเฉพาะไฟล์ Excel .xlsx", "error")
+        return redirect(url_for("subjects_page"))
+
+    try:
+        workbook = load_workbook(
+            BytesIO(file.read()),
+            read_only=True,
+            data_only=True
+        )
+        sheet = workbook.active
+
+        rows = sheet.iter_rows(values_only=True)
+        headers = next(rows, None)
+
+        if not headers:
+            flash("ไฟล์ Excel ไม่มีข้อมูล", "error")
+            return redirect(url_for("subjects_page"))
+
+        headers = [
+            str(value).strip().lower() if value is not None else ""
+            for value in headers
+        ]
+
+        required_columns = [
+            "code",
+            "name",
+            "section_id",
+            "class_days",
+            "start_time",
+            "end_time",
+            "late_after_minutes",
+        ]
+
+        missing = [
+            column for column in required_columns
+            if column not in headers
+        ]
+
+        if missing:
+            flash(
+                "ไม่พบคอลัมน์ที่จำเป็น: " + ", ".join(missing),
+                "error"
+            )
+            return redirect(url_for("subjects_page"))
+
+        column_index = {
+            name: headers.index(name)
+            for name in required_columns
+        }
+
+        sections_result = (
+            db.supabase.table("sections")
+            .select("id")
+            .execute()
+        )
+        valid_section_ids = {
+            str(section["id"])
+            for section in (sections_result.data or [])
+        }
+
+        existing_result = (
+            db.supabase.table("subjects")
+            .select("code")
+            .execute()
+        )
+        existing_codes = {
+            str(subject["code"]).strip()
+            for subject in (existing_result.data or [])
+            if subject.get("code")
+        }
+
+        def get_value(row, column):
+            index = column_index[column]
+            return row[index] if index < len(row) else None
+
+        def format_time(value):
+            if isinstance(value, datetime_time):
+                return value.strftime("%H:%M:%S")
+
+            if isinstance(value, datetime):
+                return value.strftime("%H:%M:%S")
+
+            if value is None:
+                return None
+
+            value = str(value).strip()
+
+            if not value:
+                return None
+
+            for fmt in ("%H:%M", "%H:%M:%S"):
+                try:
+                    return datetime.strptime(value, fmt).strftime("%H:%M:%S")
+                except ValueError:
+                    continue
+
+            raise ValueError(f"รูปแบบเวลาไม่ถูกต้อง: {value}")
+
+        payloads = []
+        errors = []
+        seen_codes = set()
+
+        for row_number, row in enumerate(rows, start=2):
+            if not row or all(value is None for value in row):
+                continue
+
+            try:
+                code = str(get_value(row, "code") or "").strip()
+                name = str(get_value(row, "name") or "").strip()
+                section_value = get_value(row, "section_id")
+                class_days_value = get_value(row, "class_days")
+                start_time_value = get_value(row, "start_time")
+                end_time_value = get_value(row, "end_time")
+                late_value = get_value(row, "late_after_minutes")
+
+                if not code or not name:
+                    raise ValueError("ต้องระบุ code และ name")
+
+                if code in existing_codes or code in seen_codes:
+                    raise ValueError(f"รหัสวิชาซ้ำ: {code}")
+
+                if section_value is None:
+                    raise ValueError("ต้องระบุ section_id")
+
+                section_id = str(section_value).strip()
+
+                if section_id.endswith(".0"):
+                    section_id = section_id[:-2]
+
+                if section_id not in valid_section_ids:
+                    raise ValueError(
+                        f"ไม่พบ Section ID: {section_id}"
+                    )
+
+                if not str(section_id).isdigit():
+                    raise ValueError("section_id ต้องเป็นตัวเลข")
+
+                if isinstance(class_days_value, (list, tuple)):
+                    class_days = list(class_days_value)
+                else:
+                    class_days = [
+                        day.strip()
+                        for day in str(class_days_value or "").split(",")
+                        if day.strip()
+                    ]
+
+                valid_days = {
+                    "Monday", "Tuesday", "Wednesday", "Thursday",
+                    "Friday", "Saturday", "Sunday"
+                }
+
+                if any(day not in valid_days for day in class_days):
+                    raise ValueError(
+                        "class_days ต้องใช้ชื่อวันภาษาอังกฤษ "
+                        "คั่นด้วย comma"
+                    )
+
+                if late_value is None or str(late_value).strip() == "":
+                    late_minutes = 0
+                else:
+                    late_minutes = int(late_value)
+
+                if late_minutes < 0:
+                    raise ValueError(
+                        "late_after_minutes ต้องเป็น 0 ขึ้นไป"
+                    )
+
+                payloads.append({
+                    "code": code,
+                    "name": name,
+                    "section_id": int(section_id),
+                    "class_days": class_days,
+                    "start_time": format_time(start_time_value),
+                    "end_time": format_time(end_time_value),
+                    "late_after_minutes": late_minutes,
+                })
+
+                seen_codes.add(code)
+
+            except (ValueError, TypeError, IndexError) as exc:
+                errors.append(f"แถว {row_number}: {exc}")
+
+        workbook.close()
+
+        if errors:
+            preview = "\n".join(errors[:10])
+            if len(errors) > 10:
+                preview += f"\nและมีข้อผิดพลาดอีก {len(errors) - 10} แถว"
+
+            flash(
+                f"นำเข้าไม่สำเร็จ พบข้อผิดพลาด {len(errors)} แถว:\n{preview}",
+                "error"
+            )
+            return redirect(url_for("subjects_page"))
+
+        if not payloads:
+            flash("ไม่พบข้อมูลรายวิชาสำหรับนำเข้า", "error")
+            return redirect(url_for("subjects_page"))
+
+        for start in range(0, len(payloads), 100):
+            batch = payloads[start:start + 100]
+            db.supabase.table("subjects").insert(batch).execute()
+
+        flash(f"นำเข้ารายวิชาสำเร็จ {len(payloads)} รายการ", "success")
+
+    except Exception as exc:
+        print("Import subjects failed:", repr(exc))
+        flash(f"นำเข้ารายวิชาไม่สำเร็จ: {exc}", "error")
+
+    return redirect(url_for("subjects_page"))
 
 scanner_thread = threading.Thread(
     target=scanner_worker,

@@ -5,10 +5,6 @@ from dotenv import load_dotenv
 from supabase import create_client, Client
 import base64
 
-# =========================================================
-# Supabase Connection
-# =========================================================
-
 load_dotenv()
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -26,16 +22,7 @@ supabase: Client = create_client(
     SUPABASE_KEY
 )
 
-
-# =========================================================
-# Init DB
-# =========================================================
-
 def init_db():
-    """
-    Supabase ไม่ต้องสร้าง database จาก Python
-    เพราะสร้าง table ผ่าน Supabase SQL Editor แล้ว
-    """
 
     try:
         supabase.table("users").select("id").limit(1).execute()
@@ -44,10 +31,6 @@ def init_db():
         print(f"❌ ไม่สามารถเชื่อมต่อ Supabase: {exc}")
         raise
 
-
-# =========================================================
-# Users
-# =========================================================
 
 def add_user(
     student_id,
@@ -58,10 +41,6 @@ def add_user(
     created_at=None,
     section_id=None,
 ):
-    """
-    เพิ่มผู้ใช้งานให้เข้ากับ app.py
-    รองรับ section_id (FK ไปยัง sections.id) และ created_at
-    """
 
     data = {
         "student_id": str(student_id).strip(),
@@ -73,11 +52,9 @@ def add_user(
         ),
     }
 
-    # โครงสร้างปัจจุบันใช้ section_id เป็น Foreign Key
     if section_id is not None:
         data["section_id"] = section_id
     elif section is not None:
-        # รองรับข้อมูลเก่าที่ส่งชื่อ section มา หาก schema ยังมีคอลัมน์นี้
         data["section"] = section
 
     response = (
@@ -91,10 +68,6 @@ def add_user(
 
 
 def get_all_users():
-    """
-    ดึงผู้ใช้งานทั้งหมด
-    """
-
     response = (
         supabase
         .table("users")
@@ -107,10 +80,6 @@ def get_all_users():
 
 
 def get_user_by_fingerprint(fingerprint_id):
-    """
-    ค้นหาผู้ใช้จาก fingerprint_id
-    """
-
     response = (
         supabase
         .table("users")
@@ -127,10 +96,6 @@ def get_user_by_fingerprint(fingerprint_id):
 
 
 def delete_user(user_id):
-    """
-    ลบผู้ใช้งาน
-    """
-
     response = (
         supabase
         .table("users")
@@ -143,8 +108,6 @@ def delete_user(user_id):
 
 
 def import_users_from_excel(rows):
-    """นำเข้ารายชื่อจาก Excel; ถ้า student_id มีอยู่แล้วให้อัปเดตข้อมูลเดิม"""
-
     result = {
         "inserted": 0,
         "updated": 0,
@@ -180,7 +143,6 @@ def import_users_from_excel(rows):
 
             if existing_student.data:
                 existing = existing_student.data[0]
-                # อัปเดตเฉพาะข้อมูลผู้ใช้ ไม่แตะ fingerprint_template เพื่อรักษาลายนิ้วมือเดิม
                 update_data = {
                     "full_name": full_name,
                     "department": department,
@@ -199,7 +161,6 @@ def import_users_from_excel(rows):
                 result["updated"] += 1
                 continue
 
-            # ป้องกัน fingerprint_id ไปชนกับผู้ใช้อื่นที่มี student_id คนละค่า
             existing_fingerprint = (
                 supabase.table("users")
                 .select("id, student_id")
@@ -233,15 +194,7 @@ def import_users_from_excel(rows):
 
     return result
 
-
-# =========================================================
-# Fingerprint Templates - Supabase
-# =========================================================
-
 def has_fingerprint_template(fingerprint_id):
-    """
-    ตรวจสอบว่าผู้ใช้มี Template อยู่ใน Supabase แล้วหรือไม่
-    """
 
     response = (
         supabase
@@ -261,9 +214,6 @@ def has_fingerprint_template(fingerprint_id):
 
 
 def get_fingerprint_template(fingerprint_id):
-    """
-    ดึง Template จาก Supabase และแปลง Base64 กลับเป็น bytes
-    """
 
     response = (
         supabase
@@ -286,10 +236,6 @@ def get_fingerprint_template(fingerprint_id):
 
 
 def get_all_fingerprint_templates():
-    """
-    โหลด Template ทั้งหมดจาก Supabase
-    คืนค่าเป็น dict: {fingerprint_id: template_bytes}
-    """
 
     response = (
         supabase
@@ -317,11 +263,6 @@ def get_all_fingerprint_templates():
 
 
 def update_fingerprint_template(fingerprint_id, template):
-    """
-    บันทึก Template ลง Supabase ในรูปแบบ Base64
-
-    template รับ bytes จาก SDK หรือ Base64 string
-    """
 
     if isinstance(template, bytes):
         encoded_template = base64.b64encode(
@@ -355,9 +296,6 @@ def update_fingerprint_template(fingerprint_id, template):
         )
 
     return response.data
-# =========================================================
-# Scan Logs
-# =========================================================
 
 def add_scan_log(
     fingerprint_id,
@@ -366,7 +304,6 @@ def add_scan_log(
     scanned_at=None,
     subject_id=None,
 ):
-    """บันทึกประวัติการสแกน พร้อมรายวิชาที่กำลังเช็กชื่อ (ถ้ามี)"""
     data = {
         "fingerprint_id": str(fingerprint_id),
         "user_id": user_id,
@@ -379,7 +316,6 @@ def add_scan_log(
 
 
 def get_recent_logs(limit=50):
-    """ดึงประวัติการสแกนล่าสุด พร้อมข้อมูลผู้ใช้และรายวิชา"""
     response = (
         supabase
         .table("scan_logs")
@@ -423,15 +359,6 @@ def get_logs_in_range(
     end_date,
     user_id=None
 ):
-    """
-    ดึงประวัติการสแกนตามช่วงวันที่
-
-    start_date:
-        YYYY-MM-DD
-
-    end_date:
-        YYYY-MM-DD
-    """
 
     query = (
         supabase

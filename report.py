@@ -15,13 +15,11 @@ def format_excel_datetime(value):
                 value.replace("Z", "+00:00")
             )
 
-        # ถ้าไม่มี timezone ให้ถือว่าเป็นเวลาไทยอยู่แล้ว
         if value.tzinfo is None:
             value = value.replace(
                 tzinfo=timezone(timedelta(hours=7))
             )
         else:
-            # แปลงเวลาเป็น UTC+7
             value = value.astimezone(
                 timezone(timedelta(hours=7))
             )
@@ -54,14 +52,8 @@ def _autofit_columns(ws, widths):
 
 
 def build_excel_report(logs, start_date, end_date):
-    """
-    logs: list ของ sqlite3.Row ที่มีคอลัมน์
-          scanned_at, status, fingerprint_id, student_id, full_name, department
-    คืนค่า: bytes ของไฟล์ .xlsx
-    """
     wb = Workbook()
 
-    # ---------------- ชีต 1: สรุปรายบุคคล ----------------
     ws1 = wb.active
     ws1.title = "สรุปรายบุคคล"
 
@@ -76,7 +68,6 @@ def build_excel_report(logs, start_date, end_date):
         ws1.cell(row=header_row, column=col, value=text)
     _style_header_row(ws1, header_row, len(headers))
 
-    # รวมข้อมูลตามคน
     summary = {}
     for row in logs:
         key = row["student_id"] or f"[ไม่ทราบผู้ใช้] {row['fingerprint_id']}"
@@ -113,7 +104,6 @@ def build_excel_report(logs, start_date, end_date):
 
     _autofit_columns(ws1, [8, 22, 28, 22, 18, 22])
 
-    # ---------------- ชีต 2: รายละเอียดทั้งหมด ----------------
     ws2 = wb.create_sheet("รายละเอียดทั้งหมด")
     headers2 = ["ลำดับ", "วันเวลาที่สแกน", "รหัสนักศึกษา/บุคลากร", "ชื่อ-นามสกุล", "หน่วยงาน/สาขา", "สถานะ"]
     for col, text in enumerate(headers2, start=1):

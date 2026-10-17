@@ -1,17 +1,3 @@
-"""
-ZKTeco ZK9500 USB Fingerprint Scanner
-Project: fingerprint-attendance
-
-ลงทะเบียนลายนิ้วมือ:
-    python scanner.py --enroll
-
-สแกนเช็กชื่อ:
-    python scanner.py
-
-หยุดโปรแกรม:
-    Ctrl+C
-"""
-
 import argparse
 import base64
 import time
@@ -22,11 +8,6 @@ import requests
 from pyzkfp import ZKFP2
 import database as db
 
-
-# =========================
-# Configuration
-# =========================
-
 API_URL = "http://127.0.0.1:5000/api/scan"
 
 ENROLL_NEXT_URL = "http://127.0.0.1:5000/api/scanner/enrollment/next"
@@ -36,11 +17,6 @@ CAPTURE_DELAY = 0.25
 CAPTURE_SIZE = 2048
 DUPLICATE_DELAY = 3
 
-
-# =========================
-# ZK9500 Scanner
-# =========================
-
 class ZK9500Scanner:
 
     def __init__(self):
@@ -49,18 +25,12 @@ class ZK9500Scanner:
         self.opened = False
 
     def connect(self):
-        """Initialize SDK and open the fingerprint scanner."""
-
         print("กำลังเริ่มต้น SDK...")
-
         self.zk.Init()
         self.initialized = True
-
         print("เริ่มต้น SDK สำเร็จ")
-
         count = self.zk.GetDeviceCount()
         print(f"พบอุปกรณ์: {count}")
-
         if not count:
             raise RuntimeError(
                 "ไม่พบเครื่องสแกน กรุณาตรวจสอบ USB และ Driver"
@@ -74,7 +44,6 @@ class ZK9500Scanner:
         print("เชื่อมต่อเครื่องสแกนสำเร็จ")
 
     def capture(self):
-        """Capture a fingerprint using the installed pyzkfp API."""
         while True:
             result = self.zk.AcquireFingerprint()
 
@@ -88,8 +57,6 @@ class ZK9500Scanner:
             time.sleep(CAPTURE_DELAY)
 
     def disconnect(self):
-        """Close device and terminate SDK safely."""
-
         if self.opened:
             try:
                 self.zk.CloseDevice()
@@ -108,29 +75,18 @@ class ZK9500Scanner:
             finally:
                 self.initialized = False
 
-
-# =========================
-# Supabase fingerprint storage
-# =========================
-
 def load_templates():
-    """Load fingerprint templates from Supabase; values should be bytes."""
     return db.get_all_fingerprint_templates()
 
 
 def load_templates_into_sdk(scanner, templates):
-    """Load registered templates from Supabase into SDK memory."""
     loaded = 0
 
     for fingerprint_id, template in templates.items():
         try:
             fid = int(fingerprint_id)
-
-            # database.py normally returns bytes; support Base64 strings too.
             if isinstance(template, str):
                 template = base64.b64decode(template, validate=True)
-
-            # Avoid duplicate IDs when refreshing SDK memory.
             try:
                 scanner.zk.DBDel(fid)
             except Exception:
@@ -150,19 +106,11 @@ def load_templates_into_sdk(scanner, templates):
     )
     return loaded
 
-
-# =========================
-# Enroll fingerprint
-# =========================
-
 def enroll(scanner):
-    """Enroll the same finger three times and save template to Supabase."""
-
     fingerprint_id = input(
         "กำหนด fingerprint_id เช่น 1001: "
     ).strip()
 
-    # ตรวจสอบว่า ID เป็นตัวเลข
     if not fingerprint_id.isdigit():
         print("fingerprint_id ต้องเป็นตัวเลข เช่น 1001")
         return
@@ -172,15 +120,12 @@ def enroll(scanner):
     if fid < 0:
         print("fingerprint_id ต้องไม่ติดลบ")
         return
-
-    # ตรวจสอบ Template จาก Supabase
     try:
         has_template = db.has_fingerprint_template(fingerprint_id)
     except Exception as exc:
         print(f"[ERROR] ตรวจสอบ Template ใน Supabase ไม่สำเร็จ: {exc}")
         return
 
-    # ถ้ามี Template อยู่แล้ว ให้ถามก่อนว่าจะลงทะเบียนทับหรือไม่
     if has_template:
         confirm = input(
             "รหัสนี้มี Template แล้ว ต้องการลงทะเบียนทับหรือไม่? (y/N): "
@@ -190,7 +135,6 @@ def enroll(scanner):
             print("ยกเลิกการลงทะเบียน")
             return
 
-    # อ่านลายนิ้วมือเดิม 3 ครั้ง
     captures = []
 
     for index in range(3):
@@ -217,7 +161,6 @@ def enroll(scanner):
 
         time.sleep(1)
 
-    # รวม Template จากการอ่านทั้ง 3 ครั้ง
     print("กำลังรวม Template...")
 
     try:
@@ -241,7 +184,6 @@ def enroll(scanner):
             "คำเตือน: ความยาว Template ไม่ตรงกับค่าที่ SDK คืนมา"
         )
 
-    # บันทึก Template ลง Supabase
     try:
         db.update_fingerprint_template(
             fingerprint_id,
@@ -251,7 +193,6 @@ def enroll(scanner):
         print(f"[ERROR] บันทึก Template ลง Supabase ไม่สำเร็จ: {exc}")
         return
 
-    # อัปเดต Template ใน SDK
     try:
         if has_template:
             try:
@@ -277,7 +218,6 @@ def enroll(scanner):
     print("บันทึก Template ลง Supabase เรียบร้อย")
 
 def send_scan(fingerprint_id):
-    """Send a recognized fingerprint ID to the Flask API."""
 
     payload = {
         "fingerprint_id": str(fingerprint_id),
@@ -350,7 +290,6 @@ def send_enrollment_result(job_id, success, message):
 
 
 def process_enrollment(scanner, job):
-    """Process enrollment requested by the Flask app and save to Supabase."""
     fingerprint_id = str(job["fingerprint_id"])
     job_id = job["job_id"]
     replace_existing = job.get("replace_existing") is True
@@ -398,8 +337,6 @@ def process_enrollment(scanner, job):
         if merged_length and len(merged) != int(merged_length):
             print("[WARN] ความยาว Template ไม่ตรงกับค่าที่ SDK คืนมา")
 
-        # Update SDK first, then persist. Restore the old SDK template if
-        # the Supabase update fails, so the two stores stay consistent.
         sdk_changed = False
         try:
             if has_template:
@@ -498,8 +435,6 @@ def scan_loop(scanner):
             fingerprint_id = str(uid)
             now = time.time()
 
-            # Avoid repeatedly logging the same finger
-            # while it remains on the sensor.
             if (
                 fingerprint_id != last_id
                 or now - last_time >= DUPLICATE_DELAY
