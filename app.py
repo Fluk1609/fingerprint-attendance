@@ -192,7 +192,7 @@ def current_subject_id():
 
 
 @app.route("/")
-def dashboard():
+def check_in():
     today = datetime.now(THAI_TZ).date()
     start_of_day = datetime.combine(
         today, datetime.min.time(), tzinfo=THAI_TZ
@@ -272,7 +272,7 @@ def set_active_subject():
             active_subject_id = None
         print("[SUBJECT DEBUG] ยกเลิกรายวิชาแล้ว: active_subject_id=None")
         flash("ยกเลิกรายวิชาที่กำลังเช็กชื่อแล้ว", "success")
-        return redirect(url_for("dashboard"))
+        return redirect(url_for("check_in"))
 
     try:
         subject_id = int(subject_id_raw)
@@ -301,7 +301,7 @@ def set_active_subject():
     except Exception as exc:
         flash(f"กำหนดรายวิชาที่เช็กชื่อไม่สำเร็จ: {exc}", "error")
 
-    return redirect(url_for("dashboard"))
+    return redirect(url_for("check_in"))
 
 
 @app.route("/api/scans/recent")
