@@ -11,6 +11,7 @@ app = Flask(__name__)
 CORS(app, resources={
     r"/api/*": {
         "origins": [
+            "https://fingerprint-attendance.app",
             "https://fingerprint-attendance-seven.vercel.app"
         ]
     }
