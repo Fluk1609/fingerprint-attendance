@@ -12,6 +12,7 @@ CORS(app, resources={
     r"/api/*": {
         "origins": [
             "https://fingerprint-attendance.app",
+            "https://fingerprint-attendances.vercel.app",
             "https://fingerprint-attendance-seven.vercel.app"
         ]
     }
