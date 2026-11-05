@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "";
+const API_BASE_URL = (
+  import.meta.env.VITE_API_BASE_URL || ""
+).replace(/\/+$/, "");
 
 const DAYS = [
   ["Monday", "วันจันทร์"],
