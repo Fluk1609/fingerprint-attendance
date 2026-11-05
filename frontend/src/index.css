@@ -1,0 +1,140 @@
+/* Reset browser default spacing */
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: "Prompt", sans-serif;
+}
+
+.button-container {
+  display: flex;
+  gap: 10px;
+}
+
+.btn-edit {
+  background-color: #2563eb;
+  color: white;
+  border: none;
+  padding: 7px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.btn-edit:hover {
+  background-color: #1d4ed8;
+}
+
+.btn-delete,
+.btn-delete:hover {
+  background-color: #c0392b;
+  color: white;
+}
+
+.btn-edit:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.semester-form {
+  width: 100%;
+}
+
+.semester-form-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 20px;
+}
+
+.semester-form .form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 20px;
+  min-width: 0;
+}
+
+.semester-form .form-group label {
+  font-size: 14px;
+  font-weight: 600;
+  color: #374151;
+}
+
+.semester-form .form-group input {
+  width: 100%;
+  height: 44px;
+  padding: 0 12px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  background-color: #ffffff;
+  color: #1f2937;
+  font-family: inherit;
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.semester-form .form-group input:hover {
+  border-color: #9333ea;
+}
+
+.semester-form .form-group input:focus {
+  border-color: #7b2cbf;
+  box-shadow: 0 0 0 3px rgba(123, 44, 191, 0.12);
+}
+
+.semester-form .form-group input::placeholder {
+  color: #9ca3af;
+}
+
+.semester-form-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.semester-form-actions button {
+  min-height: 42px;
+  padding: 0 20px;
+  border: none;
+  border-radius: 8px;
+  background-color: #7b2cbf;
+  color: #ffffff;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.2s, transform 0.2s;
+}
+
+.semester-form-actions button:hover:not(:disabled) {
+  background-color: #64209f;
+}
+
+.semester-form-actions button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.semester-form-actions .btn-secondary {
+  background-color: #e5e7eb;
+  color: #374151;
+}
+
+.semester-form-actions .btn-secondary:hover {
+  background-color: #d1d5db;
+}
+
+@media (max-width: 768px) {
+  .semester-form-grid {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+}

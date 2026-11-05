@@ -303,6 +303,7 @@ def add_scan_log(
     status,
     scanned_at=None,
     subject_id=None,
+    semester_id=None,
 ):
     data = {
         "fingerprint_id": str(fingerprint_id),
@@ -310,7 +311,9 @@ def add_scan_log(
         "status": status,
         "scanned_at": scanned_at or datetime.now().astimezone().isoformat(timespec="seconds"),
         "subject_id": subject_id,
+        "semester_id": semester_id,
     }
+
     response = supabase.table("scan_logs").insert(data).execute()
     return response.data
 
