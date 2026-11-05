@@ -8,16 +8,13 @@ from routes.semesters import semesters_bp
 from routes.reports import reports_bp
 app = Flask(__name__)
 
-CORS(
-    app,
-    resources={
-        r"/api/*": {
-            "origins": [
-                "http://localhost:5173"
-            ]
-        }
+CORS(app, resources={
+    r"/api/*": {
+        "origins": [
+            "https://fingerprint-attendance-seven.vercel.app"
+        ]
     }
-)
+})
 app.register_blueprint(checkin_bp)
 app.register_blueprint(users_bp)
 app.register_blueprint(subjects_bp)
