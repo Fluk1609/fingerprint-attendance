@@ -25,6 +25,7 @@ FRONTEND_ORIGINS = [
 
 CLOUD_API_URL = os.getenv("CLOUD_API_URL", "").rstrip("/")
 SCANNER_AGENT_TOKEN = os.getenv("SCANNER_AGENT_TOKEN", "")
+SCANNER_PROXY_TOKEN = os.getenv("SCANNER_PROXY_TOKEN", "")
 
 CORS(app, resources={r"/api/scanner/*": {"origins": FRONTEND_ORIGINS}})
 
@@ -197,31 +198,67 @@ def identify_fingerprint(captured_template, enrolled_templates):
                 app.logger.exception("Unable to terminate scanner SDK")
 
 
+@app.before_request
+def authenticate_scanner_request():
+    if not request.path.startswith("/api/scanner/"):
+        return None
+
+    if not SCANNER_PROXY_TOKEN:
+        return jsonify({
+            "success": False,
+            "message": "Scanner authentication is not configured"
+        }), 503
+
+    token = request.headers.get("X-Scanner-Proxy-Token", "")
+
+    if not hmac.compare_digest(token, SCANNER_PROXY_TOKEN):
+        return jsonify({
+            "success": False,
+            "message": "Unauthorized"
+        }), 401
+
+    return None
+
 @app.get("/api/scanner/health")
 def scanner_health():
-    zkfp = ZKFP2()
-    initialized = False
-    try:
-        zkfp.Init()
-        initialized = True
-        count = zkfp.GetDeviceCount()
-        return jsonify({
-            "success": True,
-            "connected": count > 0,
-            "device_count": count,
-            "message": "Scanner is ready" if count > 0 else "No fingerprint scanner detected"
-        }), 200
-    except Exception:
-        app.logger.exception("Scanner health check failed")
-        return jsonify({"success": False, "connected": False,
-                        "message": "ไม่สามารถตรวจสอบเครื่องสแกนได้"}), 500
-    finally:
-        if initialized:
-            try:
-                zkfp.Terminate()
-            except Exception:
-                app.logger.exception("Unable to terminate scanner SDK")
+    with scanner_lock:
+        zkfp = ZKFP2()
+        initialized = False
 
+        try:
+            zkfp.Init()
+            initialized = True
+
+            count = zkfp.GetDeviceCount()
+
+            return jsonify({
+                "success": True,
+                "connected": count > 0,
+                "device_count": count,
+                "message": (
+                    "Scanner is ready"
+                    if count > 0
+                    else "No fingerprint scanner detected"
+                )
+            }), 200
+
+        except Exception:
+            app.logger.exception("Scanner health check failed")
+
+            return jsonify({
+                "success": False,
+                "connected": False,
+                "message": "ไม่สามารถตรวจสอบเครื่องสแกนได้"
+            }), 500
+
+        finally:
+            if initialized:
+                try:
+                    zkfp.Terminate()
+                except Exception:
+                    app.logger.exception(
+                        "Unable to terminate scanner SDK"
+                    )
 
 @app.post("/api/scanner/enroll/start")
 def enroll_start():

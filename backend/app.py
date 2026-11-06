@@ -23,8 +23,8 @@ CORS(app, resources={
     }
 })
 SCANNER_AGENT_URL = os.getenv("SCANNER_AGENT_URL", "").rstrip("/")
-CF_ACCESS_CLIENT_ID = os.getenv("CF_ACCESS_CLIENT_ID", "")
-CF_ACCESS_CLIENT_SECRET = os.getenv("CF_ACCESS_CLIENT_SECRET", "")
+SCANNER_AGENT_URL = os.getenv("SCANNER_AGENT_URL", "").rstrip("/")
+SCANNER_PROXY_TOKEN = os.getenv("SCANNER_PROXY_TOKEN", "")
 app.register_blueprint(checkin_bp)
 app.register_blueprint(users_bp)
 app.register_blueprint(subjects_bp)
@@ -64,17 +64,16 @@ def scanner_proxy(path):
             "message": "Scanner Agent URL is not configured"
         }), 503
 
-    if not CF_ACCESS_CLIENT_ID or not CF_ACCESS_CLIENT_SECRET:
+    if not SCANNER_PROXY_TOKEN:
         return jsonify({
             "success": False,
-            "message": "Scanner Agent authentication is not configured"
+            "message": "Scanner authentication is not configured"
         }), 503
 
     url = f"{SCANNER_AGENT_URL}/api/scanner/{path}"
 
     headers = {
-        "CF-Access-Client-Id": CF_ACCESS_CLIENT_ID,
-        "CF-Access-Client-Secret": CF_ACCESS_CLIENT_SECRET
+        "X-Scanner-Proxy-Token": SCANNER_PROXY_TOKEN
     }
 
     try:
