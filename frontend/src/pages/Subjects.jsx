@@ -59,6 +59,14 @@ function Subjects() {
   const [importError, setImportError] = useState(false);
   const [confirmDialog, setConfirmDialog] = useState(null);
   const [actionLoading, setActionLoading] = useState(false);
+  const [resultDialog, setResultDialog] = useState(null);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
+  const ITEMS_PER_PAGE = 10;
+
+  const showResult = (type, title, message) => {
+    setResultDialog({ type, title, message });
+  };
 
   // Load Subjects and Sections
   const fetchData = useCallback(async () => {
@@ -191,8 +199,7 @@ function Subjects() {
     event.preventDefault();
 
     if (!excelFile) {
-      setImportMessage("กรุณาเลือกไฟล์ Excel");
-      setImportError(true);
+      showResult("error", "ไม่สามารถ Import ได้", "กรุณาเลือกไฟล์ Excel");
       return;
     }
 
@@ -229,20 +236,25 @@ function Subjects() {
 
       const inserted = data.result?.inserted ?? 0;
 
-      setImportMessage(
-        `Import รายวิชาสำเร็จ ${inserted} รายการ`
-      );
+      setImportMessage("");
 
       setExcelFile(null);
       event.target.reset();
 
       await fetchData();
+      showResult(
+        "success",
+        "Import รายวิชาสำเร็จ!",
+        `นำเข้ารายวิชาทั้งหมด ${inserted} รายการเรียบร้อยแล้ว`
+      );
     } catch (err) {
       console.error("Import subjects error:", err);
-      setImportMessage(
+      setImportMessage("");
+      showResult(
+        "error",
+        "Import รายวิชาไม่สำเร็จ",
         err.message || "เกิดข้อผิดพลาดในการ Import รายวิชา"
       );
-      setImportError(true);
     } finally {
       setImporting(false);
     }
@@ -253,12 +265,12 @@ function Subjects() {
     event.preventDefault();
 
     if (!sections.length) {
-      setFormMessage("กรุณาเพิ่ม Section ก่อนเพิ่มรายวิชา");
+      showResult("error", "ไม่สามารถบันทึกได้", "กรุณาเพิ่ม Section ก่อนเพิ่มรายวิชา");
       return;
     }
 
     if (!formData.class_days.length) {
-      setFormMessage("กรุณาเลือกวันเรียนอย่างน้อย 1 วัน");
+      showResult("error", "ข้อมูลไม่ครบถ้วน", "กรุณาเลือกวันเรียนอย่างน้อย 1 วัน");
       return;
     }
 
@@ -268,12 +280,12 @@ function Subjects() {
       !timePattern.test(formData.start_time) ||
       !timePattern.test(formData.end_time)
     ) {
-      setFormMessage("กรุณากรอกเวลาให้ถูกต้อง เช่น 08:00");
+      showResult("error", "รูปแบบเวลาไม่ถูกต้อง", "กรุณากรอกเวลาให้ถูกต้อง เช่น 08:00");
       return;
     }
 
     if (formData.start_time >= formData.end_time) {
-      setFormMessage("เวลาเลิกเรียนต้องมากกว่าเวลาเริ่มเรียน");
+      showResult("error", "ช่วงเวลาไม่ถูกต้อง", "เวลาเลิกเรียนต้องมากกว่าเวลาเริ่มเรียน");
       return;
     }
 
@@ -283,7 +295,7 @@ function Subjects() {
       !Number.isInteger(lateMinutes) ||
       lateMinutes < 0
     ) {
-      setFormMessage("นาทีผ่อนผันต้องเป็นตัวเลข 0 ขึ้นไป");
+      showResult("error", "ข้อมูลไม่ถูกต้อง", "นาทีผ่อนผันต้องเป็นตัวเลข 0 ขึ้นไป");
       return;
     }
 
@@ -318,9 +330,8 @@ function Subjects() {
         throw new Error(data.message || "ไม่สามารถเพิ่มรายวิชาได้");
       }
 
-      setFormMessage(
-        editingId ? "แก้ไขรายวิชาสำเร็จ" : "เพิ่มรายวิชาสำเร็จ"
-      );
+      const wasEditing = Boolean(editingId);
+      setFormMessage("");
 
       setEditingId(null);
 
@@ -335,9 +346,19 @@ function Subjects() {
       });
 
       await fetchData();
+      showResult(
+        "success",
+        wasEditing ? "แก้ไขรายวิชาสำเร็จ!" : "เพิ่มรายวิชาสำเร็จ!",
+        wasEditing ? "บันทึกการแก้ไขรายวิชาเรียบร้อยแล้ว" : "เพิ่มรายวิชาใหม่เรียบร้อยแล้ว"
+      );
     } catch (err) {
       console.error("Create subject error:", err);
-      setFormMessage(err.message || "เกิดข้อผิดพลาดในการบันทึก");
+      setFormMessage("");
+      showResult(
+        "error",
+        "บันทึกรายวิชาไม่สำเร็จ",
+        err.message || "เกิดข้อผิดพลาดในการบันทึก"
+      );
     } finally {
       setSaving(false);
     }
@@ -379,18 +400,57 @@ function Subjects() {
         throw new Error(data.message || "ไม่สามารถลบรายวิชาได้");
       }
 
-      setFormMessage("ลบรายวิชาสำเร็จ");
+      setFormMessage("");
       setConfirmDialog(null);
 
       await fetchData();
+      showResult(
+        "success",
+        "ลบรายวิชาสำเร็จ!",
+        `ลบรายวิชา ${subject.code} - ${subject.name} เรียบร้อยแล้ว`
+      );
     } catch (err) {
       console.error("Delete subject error:", err);
-      setError(err.message || "เกิดข้อผิดพลาดในการลบรายวิชา");
+      setError("");
+      setConfirmDialog(null);
+      showResult(
+        "error",
+        "ลบรายวิชาไม่สำเร็จ",
+        err.message || "เกิดข้อผิดพลาดในการลบรายวิชา"
+      );
     } finally {
       setActionLoading(false);
       setDeletingId(null);
     }
   };
+
+  // Search and pagination for the subject table
+  const normalizedSearch = searchTerm.trim().toLocaleLowerCase("th-TH");
+  const filteredSubjects = subjects.filter((subject) => {
+    if (!normalizedSearch) return true;
+
+    const searchableText = [
+      subject.code,
+      subject.name,
+      subject.section_name,
+      formatDays(subject.class_days),
+      subject.start_time,
+      subject.end_time,
+      subject.late_after_minutes,
+    ]
+      .filter((value) => value !== null && value !== undefined)
+      .join(" ")
+      .toLocaleLowerCase("th-TH");
+
+    return searchableText.includes(normalizedSearch);
+  });
+
+  const totalPages = Math.max(1, Math.ceil(filteredSubjects.length / ITEMS_PER_PAGE));
+  const safeCurrentPage = Math.min(currentPage, totalPages);
+  const paginatedSubjects = filteredSubjects.slice(
+    (safeCurrentPage - 1) * ITEMS_PER_PAGE,
+    safeCurrentPage * ITEMS_PER_PAGE
+  );
 
   return (
     <>
@@ -651,7 +711,21 @@ function Subjects() {
 
       {/* Subject List */}
       <div className="card">
-        <h2>รายการวิชา ({subjects.length})</h2>
+        <h2>รายการวิชา ({filteredSubjects.length})</h2>
+        <div className="table-toolbar" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: "12px", margin: "12px 0" }}>
+          <input
+            type="search"
+            style={{ flex: "1 1 280px", maxWidth: "420px", padding: "10px 12px", border: "1px solid #d1d5db", borderRadius: "8px" }}
+            value={searchTerm}
+            onChange={(event) => {
+              setSearchTerm(event.target.value);
+              setCurrentPage(1);
+            }}
+            placeholder="ค้นหารหัสวิชา ชื่อวิชา Section หรือวันเรียน..."
+            aria-label="ค้นหารายวิชา"
+          />
+          <span className="hint">แสดง {paginatedSubjects.length} จาก {filteredSubjects.length} รายการ</span>
+        </div>
 
         {error && (
           <p className="hint" role="alert">
@@ -682,25 +756,25 @@ function Subjects() {
                     กำลังโหลดข้อมูล...
                   </td>
                 </tr>
-              ) : subjects.length === 0 ? (
+              ) : filteredSubjects.length === 0 ? (
                 <tr>
                   <td colSpan="9" className="empty-row">
                     ยังไม่มีข้อมูลรายวิชา
                   </td>
                 </tr>
               ) : (
-                subjects.map((subject, index) => (
+                paginatedSubjects.map((subject, index) => (
                   <tr key={subject.id}>
-                    <td>{index + 1}</td>
-                    <td>{subject.code}</td>
-                    <td>{subject.name}</td>
-                    <td>{subject.section_name || "-"}</td>
-                    <td>{formatDays(subject.class_days)}</td>
-                    <td>{String(subject.start_time || "").slice(0, 5)}</td>
-                    <td>{String(subject.end_time || "").slice(0, 5)}</td>
-                    <td>{subject.late_after_minutes ?? 0}</td>
+                    <td data-label="ลำดับ">{(safeCurrentPage - 1) * ITEMS_PER_PAGE + index + 1}</td>
+                    <td data-label="รหัสวิชา">{subject.code}</td>
+                    <td data-label="ชื่อวิชา">{subject.name}</td>
+                    <td data-label="Section">{subject.section_name || "-"}</td>
+                    <td data-label="วันเรียน">{formatDays(subject.class_days)}</td>
+                    <td data-label="เวลาเริ่ม">{String(subject.start_time || "").slice(0, 5)}</td>
+                    <td data-label="เวลาเลิก">{String(subject.end_time || "").slice(0, 5)}</td>
+                    <td data-label="นาทีผ่อนผัน">{subject.late_after_minutes ?? 0}</td>
 
-                    <td>
+                    <td data-label="จัดการ">
                       <div style={{ display: "flex", gap: "8px" }}>
                         <button
                           type="button"
@@ -727,6 +801,29 @@ function Subjects() {
             </tbody>
           </table>
         </div>
+        {filteredSubjects.length > 0 && (
+          <div className="table-pagination" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: "12px", marginTop: "16px" }}>
+            <span className="hint">หน้า {safeCurrentPage} / {totalPages}</span>
+            <div className="table-pagination-actions" style={{ display: "flex", gap: "8px" }}>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
+                disabled={safeCurrentPage === 1}
+              >
+                ก่อนหน้า
+              </button>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
+                disabled={safeCurrentPage === totalPages}
+              >
+                ถัดไป
+              </button>
+            </div>
+          </div>
+        )}
         {confirmDialog && (
           <div
             className="confirm-modal-overlay"
@@ -769,6 +866,50 @@ function Subjects() {
           </div>
         )}
       </div>
+
+      {resultDialog && (
+        <div
+          className="confirm-modal-overlay"
+          onClick={() => setResultDialog(null)}
+        >
+          <div
+            className={`confirm-modal ${resultDialog.type === "success" ? "success-modal" : "error-modal"}`}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div
+              className="success-modal-icon"
+              style={{
+                width: "64px",
+                height: "64px",
+                margin: "0 auto 16px",
+                borderRadius: "50%",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontSize: "40px",
+                fontWeight: 700,
+                lineHeight: 1,
+                background: resultDialog.type === "success" ? "#e8f7ee" : "#fdecec",
+                color: resultDialog.type === "success" ? "#22a06b" : "#d93025",
+              }}
+            >
+              {resultDialog.type === "success" ? "✓" : "!"}
+            </div>
+
+            <h2>{resultDialog.title}</h2>
+            <p style={{ whiteSpace: "pre-line" }}>{resultDialog.message}</p>
+
+            <div className="confirm-modal-actions">
+              <button
+                type="button"
+                onClick={() => setResultDialog(null)}
+              >
+                ตกลง
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }

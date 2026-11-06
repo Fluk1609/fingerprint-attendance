@@ -16,6 +16,7 @@ function Sections() {
   const [error, setError] = useState("");
   const [formMessage, setFormMessage] = useState("");
   const [confirmDialog, setConfirmDialog] = useState(null);
+  const [resultDialog, setResultDialog] = useState(null);
   const [actionLoading, setActionLoading] = useState(false);
 
   // Load Sections
@@ -53,7 +54,11 @@ function Sections() {
     const name = sectionName.trim();
 
     if (!name) {
-      setFormMessage("กรุณากรอกชื่อ Section");
+      setResultDialog({
+        type: "error",
+        title: "กรุณากรอกข้อมูล",
+        message: "กรุณากรอกชื่อ Section ก่อนเพิ่มข้อมูล",
+      });
       return;
     }
 
@@ -75,13 +80,21 @@ function Sections() {
         throw new Error(data.message || "ไม่สามารถเพิ่ม Section ได้");
       }
 
-      setFormMessage("เพิ่ม Section สำเร็จ");
       setSectionName("");
-
       await fetchSections();
+
+      setResultDialog({
+        type: "success",
+        title: "เพิ่ม Section สำเร็จ!",
+        message: `เพิ่ม Section "${name}" เรียบร้อยแล้ว`,
+      });
     } catch (err) {
       console.error("Create section error:", err);
-      setFormMessage(err.message || "เกิดข้อผิดพลาดในการเพิ่ม Section");
+      setResultDialog({
+        type: "error",
+        title: "เพิ่ม Section ไม่สำเร็จ",
+        message: err.message || "เกิดข้อผิดพลาดในการเพิ่ม Section",
+      });
     } finally {
       setSaving(false);
     }
@@ -123,13 +136,22 @@ function Sections() {
         throw new Error(data.message || "ไม่สามารถลบ Section ได้");
       }
 
-      setFormMessage("ลบ Section สำเร็จ");
       setConfirmDialog(null);
-
       await fetchSections();
+
+      setResultDialog({
+        type: "success",
+        title: "ลบ Section สำเร็จ!",
+        message: `ลบ Section "${section.name}" เรียบร้อยแล้ว`,
+      });
     } catch (err) {
       console.error("Delete section error:", err);
-      setError(err.message || "เกิดข้อผิดพลาดในการลบ Section");
+      setConfirmDialog(null);
+      setResultDialog({
+        type: "error",
+        title: "ลบ Section ไม่สำเร็จ",
+        message: err.message || "เกิดข้อผิดพลาดในการลบ Section",
+      });
     } finally {
       setActionLoading(false);
       setDeletingId(null);
@@ -173,11 +195,6 @@ function Sections() {
               {saving ? "กำลังบันทึก..." : "เพิ่ม Section"}
             </button>
 
-            {formMessage && (
-              <p className="hint" role="status">
-                {formMessage}
-              </p>
-            )}
           </div>
         </form>
       </div>
@@ -218,9 +235,9 @@ function Sections() {
               ) : (
                 sections.map((section) => (
                   <tr key={section.id}>
-                    <td>{section.id}</td>
-                    <td>{section.name}</td>
-                    <td>
+                    <td data-label="ID">{section.id}</td>
+                    <td data-label="ชื่อ Section">{section.name}</td>
+                    <td data-label="จัดการ">
                       <button
                         type="button"
                         className="btn-delete"
@@ -278,6 +295,32 @@ function Sections() {
           </div>
         )}
       </div>
+
+      {resultDialog && (
+        <div
+          className="confirm-modal-overlay"
+          onClick={() => setResultDialog(null)}
+        >
+          <div
+            className="confirm-modal success-modal"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="success-modal-icon">
+              {resultDialog.type === "success" ? "✓" : "!"}
+            </div>
+            <h2>{resultDialog.title}</h2>
+            <p>{resultDialog.message}</p>
+            <div className="confirm-modal-actions">
+              <button
+                type="button"
+                onClick={() => setResultDialog(null)}
+              >
+                ตกลง
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }

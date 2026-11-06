@@ -32,6 +32,9 @@ function Users() {
   const [enrollMessage, setEnrollMessage] = useState("");
   const [enrollScanCount, setEnrollScanCount] = useState(0);
   const [successDialog, setSuccessDialog] = useState(null);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
+  const ITEMS_PER_PAGE = 10;
 
   // Load Users and Sections
   const fetchData = useCallback(async () => {
@@ -138,26 +141,28 @@ function Users() {
       const result = data.result || {};
 
       const message =
-        `Import เสร็จสิ้น\n` +
-        `เพิ่มใหม่ ${result.inserted ?? 0} คน\n` +
-        `อัปเดต ${result.updated ?? 0} คน\n` +
-        `ข้าม ${result.skipped ?? 0} คน`;
+        `Import เสร็จสิ้น ` +
+        `เพิ่มใหม่ ${result.inserted ?? 0} คน ` +
+        `อัปเดต ${result.updated ?? 0} คน ` +
+        `ข้าม ${result.skipped ?? 0} คน `;
 
       const errorDetails = result.errors
         ?.slice(0, 10)
         .map((item) => `แถว ${item.row}: ${item.message}`)
         .join("\n");
 
-      setImportMessage(
-        errorDetails ? `${message}\n\n${errorDetails}` : message
-      );
-
-      setImportError(Boolean(result.errors?.length));
+      setImportMessage("");
+      setImportError(false);
 
       setExcelFile(null);
       event.target.reset();
 
       await fetchData();
+
+      setSuccessDialog({
+        title: result.errors?.length ? "Import เสร็จสิ้น (มีบางรายการผิดพลาด)" : "Import สำเร็จ!",
+        message: errorDetails ? `${message}\n\n${errorDetails}` : message,
+      });
     } catch (err) {
       console.error("Import users error:", err);
       setImportMessage(
@@ -213,7 +218,7 @@ function Users() {
         );
       }
 
-      setFormMessage("เพิ่มผู้ใช้สำเร็จ");
+      setFormMessage("");
 
       setFormData({
         student_id: "",
@@ -223,6 +228,11 @@ function Users() {
       });
 
       await fetchData();
+
+      setSuccessDialog({
+        title: "บันทึกผู้ใช้สำเร็จ!",
+        message: `เพิ่มข้อมูล ${studentId} เรียบร้อยแล้ว`,
+      });
     } catch (err) {
       console.error("Create user error:", err);
       setFormMessage(
@@ -358,10 +368,12 @@ function Users() {
         throw new Error(data.message || "ไม่สามารถลบผู้ใช้ได้");
       }
 
-      setFormMessage(data.message || "ลบผู้ใช้สำเร็จ");
       setConfirmDialog(null);
-
       await fetchData();
+      setSuccessDialog({
+        title: "ลบผู้ใช้สำเร็จ!",
+        message: data.message || `ลบข้อมูล ${user.full_name} (${user.student_id}) เรียบร้อยแล้ว`,
+      });
     } catch (err) {
       setError(err.message || "เกิดข้อผิดพลาดในการลบผู้ใช้");
     } finally {
@@ -386,6 +398,26 @@ function Users() {
       minute: "2-digit",
     }).format(date);
   };
+
+  const filteredUsers = users.filter((user) => {
+    const keyword = searchTerm.trim().toLowerCase();
+    if (!keyword) return true;
+
+    return [
+      user.student_id,
+      user.full_name,
+      user.department,
+      user.section_name,
+      user.fingerprint_id ? "มีข้อมูล" : "ยังไม่ลงทะเบียน",
+    ].some((value) => String(value ?? "").toLowerCase().includes(keyword));
+  });
+
+  const totalPages = Math.max(1, Math.ceil(filteredUsers.length / ITEMS_PER_PAGE));
+  const safeCurrentPage = Math.min(currentPage, totalPages);
+  const paginatedUsers = filteredUsers.slice(
+    (safeCurrentPage - 1) * ITEMS_PER_PAGE,
+    safeCurrentPage * ITEMS_PER_PAGE
+  );
 
   return (
     <>
@@ -525,7 +557,7 @@ function Users() {
             </select>
           </div>
 
-          <div className="field full-width">
+          {/* <div className="field full-width">
             <button type="button" disabled>
               ลงทะเบียนลายนิ้วมือหลังบันทึกผู้ใช้
             </button>
@@ -534,7 +566,7 @@ function Users() {
               ขณะนี้สามารถบันทึกข้อมูลผู้ใช้ได้โดยไม่ต้องสแกนลายนิ้วมือ
               สามารถลงทะเบียนลายนิ้วมือภายหลังได้
             </p>
-          </div>
+          </div> */}
 
           <div className="field submit">
             <button type="submit" disabled={saving}>
@@ -553,8 +585,40 @@ function Users() {
       {/* User List */}
       <div className="card">
         <h2>
-          รายชื่อผู้ใช้ทั้งหมด ({users.length})
+          รายชื่อผู้ใช้ทั้งหมด ({filteredUsers.length})
         </h2>
+        <div
+          className="table-toolbar"
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: "12px",
+            margin: "12px 0",
+          }}
+        >
+          <input
+            type="search"
+            value={searchTerm}
+            onChange={(event) => {
+              setSearchTerm(event.target.value);
+              setCurrentPage(1);
+            }}
+            placeholder="ค้นหารหัส ชื่อ หน่วยงาน หรือ Section..."
+            aria-label="ค้นหาผู้ใช้"
+            style={{
+              flex: "1 1 280px",
+              maxWidth: "420px",
+              padding: "10px 12px",
+              border: "1px solid #d1d5db",
+              borderRadius: "8px",
+            }}
+          />
+          <span className="hint">
+            แสดง {paginatedUsers.length} จาก {filteredUsers.length} รายการ
+          </span>
+        </div>
         {enrollMessage && (
           <p className="hint" role="status" style={{ whiteSpace: "pre-line" }}>
             {enrollMessage}
@@ -589,23 +653,23 @@ function Users() {
                     กำลังโหลดข้อมูล...
                   </td>
                 </tr>
-              ) : users.length === 0 ? (
+              ) : filteredUsers.length === 0 ? (
                 <tr>
                   <td colSpan="8" className="empty">
                     ยังไม่มีผู้ใช้ในระบบ
                   </td>
                 </tr>
               ) : (
-                users.map((user) => (
+                paginatedUsers.map((user) => (
                   <tr key={user.id}>
-                    <td>{user.student_id ?? "-"}</td>
-                    <td>{user.full_name ?? "-"}</td>
-                    <td>{user.department ?? "-"}</td>
-                    <td>{user.section_name ?? "-"}</td>
-                    <td>{user.fingerprint_id ? "มีข้อมูล" : "ยังไม่ลงทะเบียน"}</td>
-                    <td>{formatDate(user.created_at)}</td>
+                    <td data-label="รหัส">{user.student_id ?? "-"}</td>
+                    <td data-label="ชื่อ-นามสกุล">{user.full_name ?? "-"}</td>
+                    <td data-label="หน่วยงาน/สาขา">{user.department ?? "-"}</td>
+                    <td data-label="Section">{user.section_name ?? "-"}</td>
+                    <td data-label="สถานะข้อมูล">{user.fingerprint_id ? "มีข้อมูล" : "ยังไม่ลงทะเบียน"}</td>
+                    <td data-label="ลงทะเบียนเมื่อ">{formatDate(user.created_at)}</td>
 
-                    <td>
+                    <td data-label="จัดการ">
                       <button
                         type="button"
                         className="btn-enroll"
@@ -620,7 +684,7 @@ function Users() {
                       </button>
                     </td>
 
-                    <td>
+                    <td data-label="ลบ">
                       <button
                         type="button"
                         className="btn-delete danger"
@@ -635,6 +699,41 @@ function Users() {
             </tbody>
           </table>
         </div>
+        {filteredUsers.length > 0 && (
+          <div
+            className="table-pagination"
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: "12px",
+              marginTop: "16px",
+            }}
+          >
+            <span className="hint">
+              หน้า {safeCurrentPage} / {totalPages}
+            </span>
+            <div style={{ display: "flex", gap: "8px" }}>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
+                disabled={safeCurrentPage === 1}
+              >
+                ก่อนหน้า
+              </button>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
+                disabled={safeCurrentPage === totalPages}
+              >
+                ถัดไป
+              </button>
+            </div>
+          </div>
+        )}
         {confirmDialog && (
           <div
             className="confirm-modal-overlay"
@@ -683,7 +782,7 @@ function Users() {
 
               <h2>{successDialog.title}</h2>
 
-              <p>{successDialog.message}</p>
+              <p style={{ whiteSpace: "pre-line" }}>{successDialog.message}</p>
 
               <div className="confirm-modal-actions">
                 <button

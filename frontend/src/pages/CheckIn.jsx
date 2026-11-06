@@ -10,6 +10,8 @@ const API_BASE_URL = (
     import.meta.env.VITE_API_BASE_URL || ""
 ).replace(/\/+$/, "");
 
+const SCANNER_BASE_URL = "http://127.0.0.1:5001";
+
 
 function CheckIn() {
     const [currentSubject, setCurrentSubject] = useState(null);
@@ -19,6 +21,10 @@ function CheckIn() {
 
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState("");
+
+    const [scanning, setScanning] = useState(false);
+    const [scanMessage, setScanMessage] = useState("");
+    const [scanDialog, setScanDialog] = useState(null);
 
     // =========================================
     // Format Semester Date
@@ -159,6 +165,142 @@ function CheckIn() {
     }, []);
 
     // =========================================
+    // Automatic Fingerprint Check-in
+    // Scan continuously only while a subject is active.
+    // =========================================
+
+    useEffect(() => {
+        if (!currentSubject?.active) {
+            setScanning(false);
+            setScanMessage("ขณะนี้ไม่มีรายวิชาที่กำลังเรียน จึงปิดการสแกนลายนิ้วมือ");
+            setScanDialog(null);
+            return;
+        }
+
+        let cancelled = false;
+        let waitingTimer = null;
+
+        const wait = (ms) => new Promise((resolve) => {
+            waitingTimer = setTimeout(resolve, ms);
+        });
+
+        const refreshTodayScans = async () => {
+            try {
+                const response = await fetch(
+                    `${API_BASE_URL}/api/scans/recent`,
+                    { cache: "no-store" }
+                );
+                if (!response.ok) return;
+
+                const logs = await response.json();
+                const today = getTodayThaiDateString();
+
+                if (!cancelled) {
+                    setScans((Array.isArray(logs) ? logs : []).filter(
+                        (log) => getThaiDateString(log.scanned_at) === today
+                    ));
+                }
+            } catch (err) {
+                console.error("Unable to refresh scan logs:", err);
+            }
+        };
+
+        const scanContinuously = async () => {
+            setScanning(true);
+            setScanMessage("กำลังรอวางนิ้วบนเครื่องสแกน ZK9500...");
+
+            while (!cancelled) {
+                try {
+                    const response = await fetch(
+                        `${SCANNER_BASE_URL}/api/scanner/checkin`,
+                        {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                        }
+                    );
+
+                    const data = await response.json().catch(() => ({}));
+
+                    if (cancelled) break;
+
+                    // HTTP 408 means no fingerprint was placed before timeout.
+                    // Keep waiting for the next scan without showing an error popup.
+                    if (response.status === 408) {
+                        setScanMessage("กำลังรอวางนิ้วบนเครื่องสแกน...");
+                        continue;
+                    }
+
+                    if (response.ok && data.success) {
+                        const user = data.user || {};
+                        const attendance = data.attendance || {};
+
+                        setScanDialog({
+                            success: true,
+                            title: data.already_checked_in ? "เช็คชื่อแล้ว" : "เช็คชื่อสำเร็จ",
+                            message: data.message || "บันทึกเวลาเข้าเรียนเรียบร้อยแล้ว",
+                            studentId: user.student_id,
+                            fullName: user.full_name,
+                            department: user.department,
+                            status: attendance.status,
+                            scannedAt: attendance.scanned_at,
+                            subjectName: attendance.subject_name || currentSubject?.name,
+                        });
+
+                        setScanMessage("สแกนสำเร็จแล้ว พร้อมรับการสแกนคนถัดไป");
+                        await refreshTodayScans();
+
+                        // Brief pause before asking the scanner for the next finger.
+                        await wait(1200);
+                        continue;
+                    }
+
+                    // Unknown fingerprints should not stop the continuous scan loop.
+                    if (response.status === 404) {
+                        setScanMessage(data.message || "ไม่พบข้อมูลลายนิ้วมือ กรุณาลองอีกครั้ง");
+                        await wait(1200);
+                        continue;
+                    }
+
+                    setScanMessage(
+                        data.message || `เครื่องสแกนตอบกลับ HTTP ${response.status}`
+                    );
+                    await wait(3000);
+                } catch (err) {
+                    if (cancelled) break;
+
+                    console.error("Fingerprint check-in error:", err);
+                    setScanMessage(
+                        "ไม่สามารถเชื่อมต่อ Scanner Agent ได้ กรุณาตรวจสอบว่าเปิด scanner.py อยู่"
+                    );
+                    await wait(3000);
+                }
+            }
+
+            if (!cancelled) {
+                setScanning(false);
+            }
+        };
+
+        scanContinuously();
+
+        return () => {
+            cancelled = true;
+            if (waitingTimer) clearTimeout(waitingTimer);
+            setScanning(false);
+        };
+    }, [
+        currentSubject?.active,
+        currentSubject?.code,
+        currentSubject?.start_time,
+        currentSubject?.end_time,
+    ]);
+
+    const formatAttendanceTime = (value) => {
+        if (!value) return "-";
+        return formatScanDate(value);
+    };
+
+    // =========================================
     // Get Scan Status
     // =========================================
 
@@ -211,6 +353,79 @@ function CheckIn() {
                 <span className="badge live">
                     ● อัปเดตอัตโนมัติทุก 5 วินาที
                 </span>
+            </div>
+
+            {/* Automatic Fingerprint Scanner */}
+            <div className="card" style={{ marginBottom: "1rem", padding: "1rem" }}>
+                <h2 style={{ marginTop: 0 }}>เช็คชื่อด้วยลายนิ้วมือ</h2>
+
+                {currentSubject?.active ? (
+                    <>
+                        <p className="hint">
+                            ระบบเปิดเครื่องสแกนอัตโนมัติสำหรับวิชาที่กำลังเรียน
+                            ไม่ต้องกดปุ่มเริ่มสแกน
+                        </p>
+                        <p
+                            role="status"
+                            style={{
+                                color: scanning ? "#16a34a" : "#64748b",
+                                fontWeight: 600,
+                            }}
+                        >
+                            {scanning
+                                ? "● เครื่องสแกนพร้อมใช้งาน"
+                                : "กำลังเตรียมเครื่องสแกน..."}
+                        </p>
+                        <p className="hint">{scanMessage}</p>
+
+                        {scanDialog && (
+                            <div
+                                style={{
+                                    marginTop: "1rem",
+                                    padding: "1rem",
+                                    borderRadius: "10px",
+                                    background: "#f0fdf4",
+                                    border: "1px solid #bbf7d0",
+                                }}
+                                aria-live="polite"
+                            >
+                                <strong style={{ color: "#15803d" }}>
+                                    {scanDialog.title}
+                                </strong>
+                                <p>{scanDialog.message}</p>
+                                <p><strong>รหัส:</strong> {scanDialog.studentId ?? "-"}</p>
+                                <p><strong>ชื่อ:</strong> {scanDialog.fullName ?? "-"}</p>
+                                <p><strong>หน่วยงาน/สาขา:</strong> {scanDialog.department ?? "-"}</p>
+                                <p><strong>วิชา:</strong> {scanDialog.subjectName ?? currentSubject?.name ?? "-"}</p>
+                                <p>
+                                    <strong>สถานะ:</strong>{" "}
+                                    {scanDialog.status === "on_time" ? "ตรงเวลา"
+                                        : scanDialog.status === "late" ? "มาสาย"
+                                        : scanDialog.status === "no_class" ? "ไม่มีวิชาในเวลานี้"
+                                        : scanDialog.status ?? "-"}
+                                </p>
+                                <p>
+                                    <strong>เวลาสแกน:</strong>{" "}
+                                    {formatAttendanceTime(scanDialog.scannedAt)}
+                                </p>
+                            </div>
+                        )}
+                    </>
+                ) : (
+                    <div
+                        style={{
+                            padding: "1rem",
+                            borderRadius: "10px",
+                            background: "#fff7ed",
+                            border: "1px solid #fed7aa",
+                        }}
+                    >
+                        <strong style={{ color: "#c2410c" }}>No Active Subject</strong>
+                        <p className="hint" style={{ marginBottom: 0 }}>
+                            ขณะนี้ไม่มีรายวิชาที่กำลังเรียน ระบบปิดการสแกนลายนิ้วมือ
+                        </p>
+                    </div>
+                )}
             </div>
 
             {/* Current Semester */}
@@ -296,7 +511,8 @@ function CheckIn() {
                 </div>
             </div>
 
-            {/* Recent Scan Logs */}
+            {/* Recent Scan Logs: show only when a subject is active */}
+            {currentSubject?.active && (
             <div className="card">
                 <div className="table-container">
                     <table
@@ -343,42 +559,42 @@ function CheckIn() {
                                             `${log.scanned_at}-${index}`
                                         }
                                     >
-                                        <td>
+                                        <td data-label="เวลาที่สแกน">
                                             {formatScanDate(
                                                 log.scanned_at
                                             )}
                                         </td>
 
-                                        <td>
+                                        <td data-label="รหัสนักศึกษา/บุคลากร">
                                             {log.student_id ?? "-"}
                                         </td>
 
-                                        <td>
+                                        <td data-label="ชื่อ-นามสกุล">
                                             {log.full_name ?? "-"}
                                         </td>
 
-                                        <td>
+                                        <td data-label="หน่วยงาน/สาขา">
                                             {log.department ?? "-"}
                                         </td>
 
-                                        <td>
+                                        <td data-label="รายวิชา">
                                             {log.subject_code ??
                                                 log.subject_name ??
                                                 "-"}
                                         </td>
 
-                                        <td>
+                                        <td data-label="สถานะ">
                                             {getStatus(
                                                 log.status,
                                                 log.fingerprint_id
                                             )}
                                         </td>
 
-                                        <td>
+                                        <td data-label="จำนวนมาเรียน">
                                             {log.attended_count ?? 0}
                                         </td>
 
-                                        <td>
+                                        <td data-label="จำนวนขาดเรียน">
                                             {log.absent_count ?? 0}
                                         </td>
                                     </tr>
@@ -397,6 +613,8 @@ function CheckIn() {
                     </p>
                 )}
             </div>
+            )}
+
         </>
     );
 }

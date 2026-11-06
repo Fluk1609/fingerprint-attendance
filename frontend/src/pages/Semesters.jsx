@@ -21,10 +21,23 @@ function Semesters() {
     const [message, setMessage] = useState("");
     const [confirmDialog, setConfirmDialog] = useState(null);
     const [actionLoading, setActionLoading] = useState(false);
+    const [searchText, setSearchText] = useState("");
+    const [statusFilter, setStatusFilter] = useState("all");
+    const [sortOrder, setSortOrder] = useState("newest");
+    const [successDialog, setSuccessDialog] = useState(null);
 
-    const activeSemester = semesters.find(
-        (semester) => semester.is_active
-    );
+    const activeSemester = semesters.find((semester) => semester.is_active);
+    const todayISO = new Date().toISOString().slice(0, 10);
+    const getDateStatus = (semester) => {
+        if (semester.is_active) return { label: "กำลังใช้งาน", className: "tag ok" };
+        if (semester.end_date < todayISO) return { label: "สิ้นสุดแล้ว", className: "tag" };
+        if (semester.start_date > todayISO) return { label: "ยังไม่เริ่ม", className: "tag" };
+        return { label: "อยู่ในช่วงเวลา แต่ยังไม่เปิด", className: "tag" };
+    };
+    const filteredSemesters = semesters
+        .filter((semester) => `${semester.semester_name} ${semester.start_date} ${semester.end_date}`.toLowerCase().includes(searchText.toLowerCase()))
+        .filter((semester) => statusFilter === "all" || (statusFilter === "active" ? semester.is_active : statusFilter === "ended" ? (!semester.is_active && semester.end_date < todayISO) : statusFilter === "upcoming" ? (!semester.is_active && semester.start_date > todayISO) : !semester.is_active))
+        .sort((a, b) => sortOrder === "newest" ? b.start_date.localeCompare(a.start_date) : a.start_date.localeCompare(b.start_date));
 
     const fetchSemesters = useCallback(async () => {
         try {
@@ -110,9 +123,9 @@ function Semesters() {
                 throw new Error(data.message || "บันทึกข้อมูลไม่สำเร็จ");
             }
 
-            setMessage(data.message);
             resetForm();
             await fetchSemesters();
+            setSuccessDialog({ title: editingId ? "แก้ไขภาคเรียนสำเร็จ" : "เพิ่มภาคเรียนสำเร็จ", message: data.message || "บันทึกข้อมูลเรียบร้อยแล้ว" });
         } catch (err) {
             setError(err.message);
         } finally {
@@ -214,10 +227,10 @@ function Semesters() {
                 throw new Error(data.message || action.error);
             }
 
-            setMessage(data.message);
             setConfirmDialog(null);
-
             await fetchSemesters();
+            const actionLabels = { activate: "เปิดภาคเรียนสำเร็จ", close: "ปิดภาคเรียนสำเร็จ", delete: "ลบภาคเรียนสำเร็จ" };
+            setSuccessDialog({ title: actionLabels[type], message: data.message || `${actionLabels[type]}: ${semester.semester_name}` });
         } catch (err) {
             setError(err.message);
         } finally {
@@ -243,8 +256,6 @@ function Semesters() {
             <div className="page-header">
                 <h1>จัดการภาคเรียน</h1>
             </div>
-
-            {/* Active Semester */}
             <div className="card" style={{ marginBottom: "1rem", padding: "1rem" }}>
                 <h2 style={{ marginTop: 0 }}>ภาคเรียนปัจจุบัน</h2>
 
@@ -357,8 +368,12 @@ function Semesters() {
 
             {/* Semester History */}
             <div className="card">
-                <h2 style={{ marginTop: 0 }}>ประวัติภาคเรียน</h2>
-
+                <h2 style={{ marginTop: 0 }}>ประวัติภาคเรียน ({filteredSemesters.length})</h2>
+                <div className="form-grid" style={{ marginBottom: "1rem" }}>
+                    <div className="field"><label htmlFor="semester_search">ค้นหาภาคเรียน</label><input id="semester_search" value={searchText} onChange={e => setSearchText(e.target.value)} placeholder="ค้นหาชื่อภาคเรียน" /></div>
+                    <div className="field"><label htmlFor="semester_status">กรองสถานะ</label><select id="semester_status" value={statusFilter} onChange={e => setStatusFilter(e.target.value)}><option value="all">ทุกสถานะ</option><option value="active">กำลังใช้งาน</option><option value="inactive">ปิดใช้งาน</option><option value="upcoming">ยังไม่เริ่ม</option><option value="ended">สิ้นสุดแล้ว</option></select></div>
+                    <div className="field"><label htmlFor="semester_sort">เรียงตามวันที่เริ่ม</label><select id="semester_sort" value={sortOrder} onChange={e => setSortOrder(e.target.value)}><option value="newest">ใหม่ไปเก่า</option><option value="oldest">เก่าไปใหม่</option></select></div>
+                </div>
                 <div className="table-container">
                     <table className="data-table">
                         <thead>
@@ -378,34 +393,24 @@ function Semesters() {
                                         กำลังโหลดข้อมูล...
                                     </td>
                                 </tr>
-                            ) : semesters.length === 0 ? (
-                                <tr>
-                                    <td colSpan="5" className="empty">
-                                        ยังไม่มีข้อมูลภาคเรียน
-                                    </td>
-                                </tr>
+                            ) : filteredSemesters.length === 0 ? (
+                                <tr><td colSpan="5" className="empty">ไม่พบข้อมูลภาคเรียน</td></tr>
                             ) : (
-                                semesters.map((semester) => (
+                                filteredSemesters.map((semester) => (
                                     <tr key={semester.id}>
-                                        <td>{semester.semester_name}</td>
+                                        <td data-label="ภาคเรียน">{semester.semester_name}</td>
 
-                                        <td>{formatDate(semester.start_date)}</td>
+                                        <td data-label="วันเริ่มต้น">{formatDate(semester.start_date)}</td>
 
-                                        <td>{formatDate(semester.end_date)}</td>
+                                        <td data-label="วันสิ้นสุด">{formatDate(semester.end_date)}</td>
 
-                                        <td>
-                                            {semester.is_active ? (
-                                                <span className="tag ok">
-                                                    กำลังใช้งาน
-                                                </span>
-                                            ) : (
-                                                <span className="tag">
-                                                    ปิดใช้งาน
-                                                </span>
-                                            )}
+                                        <td data-label="สถานะ">
+                                            <span className={getDateStatus(semester).className} title={semester.is_active ? "เปิดใช้งานอยู่ในระบบ" : "สถานะคำนวณจากวันที่และการเปิดใช้งาน"}>
+                                                {getDateStatus(semester).label}
+                                            </span>
                                         </td>
 
-                                        <td>
+                                        <td data-label="จัดการ">
                                             <div
                                                 style={{
                                                     display: "flex",
@@ -500,6 +505,16 @@ function Semesters() {
                                     : confirmDialog.confirmText}
                             </button>
                         </div>
+                    </div>
+                </div>
+            )}
+            {successDialog && (
+                <div className="confirm-modal-overlay" onClick={() => setSuccessDialog(null)}>
+                    <div className="confirm-modal success-modal" onClick={event => event.stopPropagation()}>
+                        <div className="success-modal-icon">✓</div>
+                        <h2>{successDialog.title}</h2>
+                        <p>{successDialog.message}</p>
+                        <div className="confirm-modal-actions"><button type="button" onClick={() => setSuccessDialog(null)}>ตกลง</button></div>
                     </div>
                 </div>
             )}

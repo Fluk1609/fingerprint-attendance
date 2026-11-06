@@ -38,37 +38,87 @@ def cloud_headers():
     return {"X-Scanner-Agent-Token": SCANNER_AGENT_TOKEN}
 
 
-def capture_fingerprint(timeout=30):
-    zkfp = ZKFP2()
-    sdk_initialized = False
-    device_opened = False
-    try:
-        zkfp.Init()
-        sdk_initialized = True
-        zkfp.OpenDevice(0)
-        device_opened = True
+def capture_fingerprint(timeout=30, reconnect_timeout=60, retry_interval=2):
+    """
+    Capture one fingerprint with USB hot-plug recovery.
 
-        started_at = time.time()
-        while time.time() - started_at < timeout:
-            result = zkfp.AcquireFingerprint()
-            if result:
-                template, _image = result
-                template_bytes = bytes(template)
-                if template_bytes:
-                    return template_bytes
-            time.sleep(0.2)
-        raise TimeoutError("หมดเวลารอสแกนลายนิ้วมือ กรุณาลองอีกครั้ง")
-    finally:
-        if device_opened:
-            try:
-                zkfp.CloseDevice()
-            except Exception:
-                app.logger.exception("Unable to close scanner device")
-        if sdk_initialized:
-            try:
-                zkfp.Terminate()
-            except Exception:
-                app.logger.exception("Unable to terminate scanner SDK")
+    - If no finger is placed while the scanner remains connected, raise TimeoutError.
+    - If Init/OpenDevice/AcquireFingerprint fails because the scanner is unplugged,
+      release what can be released and retry from a fresh ZKFP2 instance.
+    - After reconnect_timeout, raise ConnectionError for the API handler.
+    """
+    reconnect_deadline = time.monotonic() + reconnect_timeout
+    last_error = None
+
+    while time.monotonic() < reconnect_deadline:
+        zkfp = None
+        sdk_initialized = False
+        device_opened = False
+
+        try:
+            # Construct a fresh wrapper on every retry. Some SDK states cannot be reused
+            # after the USB device has been removed.
+            zkfp = ZKFP2()
+            zkfp.Init()
+            sdk_initialized = True
+
+            device_count = zkfp.GetDeviceCount()
+            if not device_count:
+                raise ConnectionError("ไม่พบเครื่องสแกนลายนิ้วมือ")
+
+            zkfp.OpenDevice(0)
+            device_opened = True
+
+            scan_deadline = time.monotonic() + timeout
+            while time.monotonic() < scan_deadline:
+                # USB removal may make either this call or AcquireFingerprint fail.
+                if zkfp.GetDeviceCount() <= 0:
+                    raise ConnectionError("เครื่องสแกนถูกถอดออก")
+
+                result = zkfp.AcquireFingerprint()
+                if result:
+                    template, _image = result
+                    template_bytes = bytes(template)
+                    if template_bytes:
+                        return template_bytes
+
+                time.sleep(0.2)
+
+            raise TimeoutError("หมดเวลารอสแกนลายนิ้วมือ กรุณาวางนิ้วแล้วลองอีกครั้ง")
+
+        except TimeoutError:
+            # No finger is a normal scan-cycle timeout, not a USB disconnection.
+            raise
+        except Exception as exc:
+            last_error = exc
+            app.logger.warning(
+                "Scanner init/capture failed; retrying in %.1f seconds (%s: %s)",
+                retry_interval,
+                type(exc).__name__,
+                exc,
+            )
+        finally:
+            # Cleanup must never prevent the reconnect loop from continuing.
+            if zkfp is not None and device_opened:
+                try:
+                    zkfp.CloseDevice()
+                except Exception as cleanup_error:
+                    app.logger.debug("CloseDevice during recovery: %s", cleanup_error)
+
+            if zkfp is not None and sdk_initialized:
+                try:
+                    zkfp.Terminate()
+                except Exception as cleanup_error:
+                    app.logger.debug("Terminate during recovery: %s", cleanup_error)
+
+        remaining = reconnect_deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(retry_interval, remaining))
+
+    raise ConnectionError(
+        "ไม่สามารถเชื่อมต่อเครื่องสแกน ZK9500 ได้ "
+        "กรุณาตรวจสอบสาย USB ระบบจะลองเชื่อมต่อใหม่ในรอบถัดไป"
+    ) from last_error
 
 
 def identify_fingerprint(captured_template, enrolled_templates):
@@ -337,6 +387,13 @@ def scanner_checkin():
             }), 200
         except TimeoutError as exc:
             return jsonify({"success": False, "message": str(exc)}), 408
+        except ConnectionError as exc:
+            app.logger.warning("Fingerprint scanner is disconnected: %s", exc)
+            return jsonify({
+                "success": False,
+                "scanner_connected": False,
+                "message": str(exc),
+            }), 503
         except requests.RequestException:
             app.logger.exception("Cloud API request failed during check-in")
             return jsonify({"success": False, "message": "ไม่สามารถเชื่อมต่อ Cloud API ได้"}), 502
