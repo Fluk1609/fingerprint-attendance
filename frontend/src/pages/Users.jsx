@@ -4,8 +4,6 @@ const API_BASE_URL = (
   import.meta.env.VITE_API_BASE_URL || ""
 ).replace(/\/+$/, "");
 
-const SCANNER_BASE_URL = "http://127.0.0.1:5001";
-
 function Users() {
   const [formData, setFormData] = useState({
     student_id: "",
@@ -254,7 +252,7 @@ function Users() {
       setEnrollMessage(`กำลังเริ่มลงทะเบียน ${user.full_name}...`);
 
       const startResponse = await fetch(
-        `${SCANNER_BASE_URL}/api/scanner/enroll/start`,
+        `${API_BASE_URL}/api/scanner/enroll/start`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -275,7 +273,7 @@ function Users() {
         );
 
         const captureResponse = await fetch(
-          `${SCANNER_BASE_URL}/api/scanner/enroll/capture`,
+          `${API_BASE_URL}/api/scanner/enroll/capture`,
           { method: "POST" }
         );
 
@@ -293,7 +291,7 @@ function Users() {
       setEnrollMessage("กำลังรวม Template และบันทึกลงฐานข้อมูล...");
 
       const finishResponse = await fetch(
-        `${SCANNER_BASE_URL}/api/scanner/enroll/finish`,
+        `${API_BASE_URL}/api/scanner/enroll/finish`,
         { method: "POST" }
       );
 
@@ -322,7 +320,7 @@ function Users() {
       setEnrollMessage(err.message || "เกิดข้อผิดพลาดในการลงทะเบียน");
 
       try {
-        await fetch(`${SCANNER_BASE_URL}/api/scanner/enroll/cancel`, {
+        await fetch(`${API_BASE_URL}/api/scanner/enroll/cancel`, {
           method: "POST",
         });
       } catch {

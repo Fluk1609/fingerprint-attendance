@@ -10,8 +10,6 @@ const API_BASE_URL = (
     import.meta.env.VITE_API_BASE_URL || ""
 ).replace(/\/+$/, "");
 
-const SCANNER_BASE_URL = "http://127.0.0.1:5001";
-
 
 function CheckIn() {
     const [currentSubject, setCurrentSubject] = useState(null);
@@ -212,7 +210,7 @@ function CheckIn() {
             while (!cancelled) {
                 try {
                     const response = await fetch(
-                        `${SCANNER_BASE_URL}/api/scanner/checkin`,
+                        `${API_BASE_URL}/api/scanner/checkin`,
                         {
                             method: "POST",
                             headers: { "Content-Type": "application/json" },
