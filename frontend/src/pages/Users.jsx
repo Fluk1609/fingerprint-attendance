@@ -30,6 +30,8 @@ function Users() {
   const [deleting, setDeleting] = useState(false);
   const [enrollingUserId, setEnrollingUserId] = useState(null);
   const [enrollMessage, setEnrollMessage] = useState("");
+  const [enrollScanCount, setEnrollScanCount] = useState(0);
+  const [successDialog, setSuccessDialog] = useState(null);
 
   // Load Users and Sections
   const fetchData = useCallback(async () => {
@@ -238,46 +240,88 @@ function Users() {
 
     try {
       setEnrollingUserId(user.id);
+      setEnrollScanCount(0);
       setEnrollMessage(`กำลังเริ่มลงทะเบียน ${user.full_name}...`);
 
-      const startResponse = await fetch(`${SCANNER_BASE_URL}/api/scanner/enroll/start`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user_id: user.id }),
-      });
+      const startResponse = await fetch(
+        `${SCANNER_BASE_URL}/api/scanner/enroll/start`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ user_id: user.id }),
+        }
+      );
+
       const startData = await startResponse.json();
-      if (!startResponse.ok) throw new Error(startData.message || "ไม่สามารถเริ่มลงทะเบียนได้");
+
+      if (!startResponse.ok) {
+        throw new Error(startData.message || "ไม่สามารถเริ่มลงทะเบียนได้");
+      }
 
       for (let scan = 1; scan <= 3; scan += 1) {
-        setEnrollMessage(`กรุณาวางนิ้วของ ${user.full_name} บนเครื่องสแกน (ครั้งที่ ${scan}/3)`);
-        const captureResponse = await fetch(`${SCANNER_BASE_URL}/api/scanner/enroll/capture`, {
-          method: "POST",
-        });
+        setEnrollScanCount(scan);
+        setEnrollMessage(
+          `กรุณาวางนิ้วของ ${user.full_name} บนเครื่องสแกน (ครั้งที่ ${scan}/3)`
+        );
+
+        const captureResponse = await fetch(
+          `${SCANNER_BASE_URL}/api/scanner/enroll/capture`,
+          { method: "POST" }
+        );
+
         const captureData = await captureResponse.json();
-        if (!captureResponse.ok) throw new Error(captureData.message || `สแกนครั้งที่ ${scan} ไม่สำเร็จ`);
+
+        if (!captureResponse.ok) {
+          throw new Error(
+            captureData.message || `สแกนครั้งที่ ${scan} ไม่สำเร็จ`
+          );
+        }
+
         setEnrollMessage(`สแกนสำเร็จ ${captureData.scan_count}/3 ครั้ง`);
       }
 
       setEnrollMessage("กำลังรวม Template และบันทึกลงฐานข้อมูล...");
-      const finishResponse = await fetch(`${SCANNER_BASE_URL}/api/scanner/enroll/finish`, {
-        method: "POST",
-      });
-      const finishData = await finishResponse.json();
-      if (!finishResponse.ok) throw new Error(finishData.message || "ไม่สามารถบันทึกลายนิ้วมือได้");
 
-      setEnrollMessage(`ลงทะเบียนลายนิ้วมือของ ${user.full_name} สำเร็จ`);
-      setFormMessage("ลงทะเบียนลายนิ้วมือสำเร็จ");
+      const finishResponse = await fetch(
+        `${SCANNER_BASE_URL}/api/scanner/enroll/finish`,
+        { method: "POST" }
+      );
+
+      const finishData = await finishResponse.json();
+
+      if (!finishResponse.ok) {
+        throw new Error(
+          finishData.message || "ไม่สามารถบันทึกลายนิ้วมือได้"
+        );
+      }
+
+      setEnrollMessage("");
+      setFormMessage("");
+
       await fetchData();
+
+      setSuccessDialog({
+        title: "ลงทะเบียนสำเร็จ!",
+        message: `ลงทะเบียนลายนิ้วมือของ ${user.full_name} เรียบร้อยแล้ว`,
+      });
+
+      await fetchData();
+
     } catch (err) {
       console.error("Fingerprint enrollment error:", err);
       setEnrollMessage(err.message || "เกิดข้อผิดพลาดในการลงทะเบียน");
+
       try {
-        await fetch(`${SCANNER_BASE_URL}/api/scanner/enroll/cancel`, { method: "POST" });
+        await fetch(`${SCANNER_BASE_URL}/api/scanner/enroll/cancel`, {
+          method: "POST",
+        });
       } catch {
         // Scanner Agent may be offline.
       }
+
     } finally {
       setEnrollingUserId(null);
+      setEnrollScanCount(0);
     }
   };
 
@@ -568,7 +612,11 @@ function Users() {
                         disabled={enrollingUserId !== null}
                         onClick={() => handleEnroll(user)}
                       >
-                        ลงทะเบียนลายนิ้วมือ
+                        {enrollingUserId === user.id
+                          ? enrollScanCount > 0
+                            ? `กำลังสแกน ${enrollScanCount}/3`
+                            : "กำลังเตรียม..."
+                          : "ลงทะเบียนลายนิ้วมือ"}
                       </button>
                     </td>
 
@@ -621,6 +669,28 @@ function Users() {
                   disabled={deleting}
                 >
                   {deleting ? "กำลังลบ..." : confirmDialog.confirmText}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+        {successDialog && (
+          <div className="confirm-modal-overlay">
+            <div className="confirm-modal success-modal">
+              <div className="success-modal-icon">
+                ✓
+              </div>
+
+              <h2>{successDialog.title}</h2>
+
+              <p>{successDialog.message}</p>
+
+              <div className="confirm-modal-actions">
+                <button
+                  type="button"
+                  onClick={() => setSuccessDialog(null)}
+                >
+                  ตกลง
                 </button>
               </div>
             </div>
