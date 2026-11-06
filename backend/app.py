@@ -13,7 +13,9 @@ CORS(app, resources={
         "origins": [
             "https://fingerprint-attendance.app",
             "https://fingerprint-attendances.vercel.app",
-            "https://fingerprint-attendance-seven.vercel.app"
+            "https://fingerprint-attendance-seven.vercel.app",
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
         ]
     }
 })

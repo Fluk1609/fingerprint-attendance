@@ -4,6 +4,8 @@ const API_BASE_URL = (
   import.meta.env.VITE_API_BASE_URL || ""
 ).replace(/\/+$/, "");
 
+const SCANNER_BASE_URL = "http://127.0.0.1:5001";
+
 function Users() {
   const [formData, setFormData] = useState({
     student_id: "",
@@ -26,6 +28,8 @@ function Users() {
   const [importError, setImportError] = useState(false);
   const [confirmDialog, setConfirmDialog] = useState(null);
   const [deleting, setDeleting] = useState(false);
+  const [enrollingUserId, setEnrollingUserId] = useState(null);
+  const [enrollMessage, setEnrollMessage] = useState("");
 
   // Load Users and Sections
   const fetchData = useCallback(async () => {
@@ -227,9 +231,54 @@ function Users() {
     }
   };
 
-  // Enroll fingerprint (not connected yet)
-  const handleEnroll = (user) => {
-    console.log("Enroll user:", user.id);
+  // Enroll fingerprint through the local Scanner Agent.
+  // The biometric template is sent directly from Agent to Cloud API, not through React.
+  const handleEnroll = async (user) => {
+    if (enrollingUserId !== null) return;
+
+    try {
+      setEnrollingUserId(user.id);
+      setEnrollMessage(`กำลังเริ่มลงทะเบียน ${user.full_name}...`);
+
+      const startResponse = await fetch(`${SCANNER_BASE_URL}/api/scanner/enroll/start`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user_id: user.id }),
+      });
+      const startData = await startResponse.json();
+      if (!startResponse.ok) throw new Error(startData.message || "ไม่สามารถเริ่มลงทะเบียนได้");
+
+      for (let scan = 1; scan <= 3; scan += 1) {
+        setEnrollMessage(`กรุณาวางนิ้วของ ${user.full_name} บนเครื่องสแกน (ครั้งที่ ${scan}/3)`);
+        const captureResponse = await fetch(`${SCANNER_BASE_URL}/api/scanner/enroll/capture`, {
+          method: "POST",
+        });
+        const captureData = await captureResponse.json();
+        if (!captureResponse.ok) throw new Error(captureData.message || `สแกนครั้งที่ ${scan} ไม่สำเร็จ`);
+        setEnrollMessage(`สแกนสำเร็จ ${captureData.scan_count}/3 ครั้ง`);
+      }
+
+      setEnrollMessage("กำลังรวม Template และบันทึกลงฐานข้อมูล...");
+      const finishResponse = await fetch(`${SCANNER_BASE_URL}/api/scanner/enroll/finish`, {
+        method: "POST",
+      });
+      const finishData = await finishResponse.json();
+      if (!finishResponse.ok) throw new Error(finishData.message || "ไม่สามารถบันทึกลายนิ้วมือได้");
+
+      setEnrollMessage(`ลงทะเบียนลายนิ้วมือของ ${user.full_name} สำเร็จ`);
+      setFormMessage("ลงทะเบียนลายนิ้วมือสำเร็จ");
+      await fetchData();
+    } catch (err) {
+      console.error("Fingerprint enrollment error:", err);
+      setEnrollMessage(err.message || "เกิดข้อผิดพลาดในการลงทะเบียน");
+      try {
+        await fetch(`${SCANNER_BASE_URL}/api/scanner/enroll/cancel`, { method: "POST" });
+      } catch {
+        // Scanner Agent may be offline.
+      }
+    } finally {
+      setEnrollingUserId(null);
+    }
   };
 
   // Delete user
@@ -433,12 +482,8 @@ function Users() {
           </div>
 
           <div className="field full-width">
-            <button
-              type="button"
-              disabled
-              onClick={handleEnroll}
-            >
-              ลงทะเบียนลายนิ้วมือ
+            <button type="button" disabled>
+              ลงทะเบียนลายนิ้วมือหลังบันทึกผู้ใช้
             </button>
 
             <p className="hint">
@@ -466,6 +511,11 @@ function Users() {
         <h2>
           รายชื่อผู้ใช้ทั้งหมด ({users.length})
         </h2>
+        {enrollMessage && (
+          <p className="hint" role="status" style={{ whiteSpace: "pre-line" }}>
+            {enrollMessage}
+          </p>
+        )}
 
         {error && (
           <p className="hint" role="alert">
@@ -515,7 +565,7 @@ function Users() {
                       <button
                         type="button"
                         className="btn-enroll"
-                        disabled
+                        disabled={enrollingUserId !== null}
                         onClick={() => handleEnroll(user)}
                       >
                         ลงทะเบียนลายนิ้วมือ

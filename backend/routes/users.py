@@ -1,7 +1,9 @@
 
-from flask import Blueprint, jsonify
-from config.database import supabase
-from flask import Blueprint, jsonify, request
+import os
+import secrets
+import base64
+import binascii
+from flask import Blueprint, jsonify, request, current_app
 from datetime import datetime, timezone, timedelta
 from config.database import supabase
 from openpyxl import load_workbook
@@ -53,7 +55,7 @@ def get_users():
         return jsonify(users), 200
 
     except Exception:
-        users_bp.logger.exception("Unable to retrieve users")
+        current_app.logger.exception("Unable to retrieve users")
         return jsonify({
             "success": False,
             "message": "Unable to retrieve users"
@@ -73,7 +75,7 @@ def get_sections():
         return jsonify(response.data or []), 200
 
     except Exception:
-        users_bp.logger.exception("Unable to retrieve sections")
+        current_app.logger.exception("Unable to retrieve sections")
         return jsonify({
             "success": False,
             "message": "Unable to retrieve sections"
@@ -210,7 +212,7 @@ def create_user():
         }), 201
 
     except Exception:
-        users_bp.logger.exception("Unable to create user")
+        current_app.logger.exception("Unable to create user")
 
         return jsonify({
             "success": False,
@@ -255,7 +257,7 @@ def delete_user(user_id):
 
         return jsonify({"success": True, "message": "ลบผู้ใช้สำเร็จ"}), 200
     except Exception:
-        users_bp.logger.exception("Unable to delete user")
+        current_app.logger.exception("Unable to delete user")
         return jsonify({"success": False, "message": "ไม่สามารถลบผู้ใช้ได้"}), 500
 
 
@@ -302,7 +304,7 @@ def create_section():
         }), 201
 
     except Exception:
-        users_bp.logger.exception("Unable to create section")
+        current_app.logger.exception("Unable to create section")
         return jsonify({
             "success": False,
             "message": "ไม่สามารถเพิ่ม Section ได้"
@@ -359,7 +361,7 @@ def delete_section(section_id):
         }), 200
 
     except Exception:
-        users_bp.logger.exception("Unable to delete section")
+        current_app.logger.exception("Unable to delete section")
         return jsonify({
             "success": False,
             "message": "ไม่สามารถลบ Section ได้"
@@ -575,7 +577,7 @@ def import_users_excel():
                 result["inserted"] += 1
 
             except Exception as exc:
-                users_bp.logger.exception(
+                current_app.logger.exception(
                     "Import user row %s failed", row_number
                 )
 
@@ -598,7 +600,7 @@ def import_users_excel():
         }), 400
 
     except Exception:
-        users_bp.logger.exception("Unable to import users")
+        current_app.logger.exception("Unable to import users")
         return jsonify({
             "success": False,
             "message": "ไม่สามารถ Import ผู้ใช้ได้"
@@ -607,3 +609,78 @@ def import_users_excel():
     finally:
         if workbook is not None:
             workbook.close()
+
+
+# Save fingerprint template from the local Scanner Agent only.
+@users_bp.route("/api/users/<int:user_id>/fingerprint", methods=["PUT"])
+def save_user_fingerprint(user_id):
+    expected = os.getenv("SCANNER_AGENT_TOKEN", "")
+    supplied = request.headers.get("X-Scanner-Agent-Token", "")
+    if not expected or not supplied or not secrets.compare_digest(expected, supplied):
+        return jsonify({
+            "success": False,
+            "message": "Scanner Agent authentication failed"
+        }), 401
+
+    payload = request.get_json(silent=True) or {}
+    template_base64 = str(payload.get("template") or "").strip()
+
+    if not template_base64 or len(template_base64) > 20000:
+        return jsonify({"success": False, "message": "Fingerprint Template ไม่ถูกต้อง"}), 400
+
+    try:
+        template_bytes = base64.b64decode(template_base64, validate=True)
+    except (binascii.Error, ValueError):
+        return jsonify({"success": False, "message": "Fingerprint Template ต้องเป็น Base64 ที่ถูกต้อง"}), 400
+
+    if not 512 <= len(template_bytes) <= 4096:
+        return jsonify({"success": False, "message": "ขนาด Fingerprint Template ไม่ถูกต้อง"}), 400
+
+    try:
+        existing = (
+            supabase.table("users")
+            .select("id")
+            .eq("id", user_id)
+            .limit(1)
+            .execute()
+        )
+        if not existing.data:
+            return jsonify({"success": False, "message": "ไม่พบนักศึกษาที่ต้องการลงทะเบียน"}), 404
+
+        if user_id > 2147483647:
+            return jsonify({"success": False, "message": "User ID เกินขอบเขตที่ Scanner SDK รองรับ"}), 400
+
+        fingerprint_id = str(user_id)
+        duplicate = (
+            supabase.table("users")
+            .select("id")
+            .eq("fingerprint_id", fingerprint_id)
+            .neq("id", user_id)
+            .limit(1)
+            .execute()
+        )
+        if duplicate.data:
+            return jsonify({"success": False, "message": "Fingerprint ID นี้ถูกใช้งานแล้ว"}), 409
+
+        updated = (
+            supabase.table("users")
+            .update({
+                "fingerprint_id": fingerprint_id,
+                "fingerprint_template": template_base64
+            })
+            .eq("id", user_id)
+            .execute()
+        )
+        if not updated.data:
+            raise RuntimeError("Fingerprint update returned no data")
+
+        return jsonify({
+            "success": True,
+            "message": "ลงทะเบียนลายนิ้วมือสำเร็จ",
+            "user_id": user_id,
+            "fingerprint_id": fingerprint_id
+        }), 200
+
+    except Exception:
+        current_app.logger.exception("Unable to save fingerprint for user %s", user_id)
+        return jsonify({"success": False, "message": "ไม่สามารถบันทึก Fingerprint Template ได้"}), 500

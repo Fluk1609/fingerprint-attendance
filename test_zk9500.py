@@ -10,6 +10,9 @@ try:
 
     print("กำลังเปิดเครื่อง ZK9500...")
     zkfp.OpenDevice(0)
+    print("กำลังตรวจสอบข้อมูลเครื่องสแกน...")
+
+    print("Device Count:", zkfp.GetDeviceCount())
     print("เชื่อมต่อเครื่องสแกนสำเร็จ")
 
 except Exception as e:
