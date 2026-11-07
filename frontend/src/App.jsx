@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 
 import MainLayout from "./layouts/MainLayout";
+import Home from "./pages/Home";
 import CheckIn from "./pages/CheckIn";
 import Users from "./pages/Users";
 import Sections from "./pages/Sections";
@@ -13,35 +14,13 @@ function App() {
     <BrowserRouter>
       <Routes>
         <Route element={<MainLayout />}>
-          <Route
-            path="/"
-            element={<CheckIn />}
-          />
-
-          <Route
-            path="/users"
-            element={<Users />}
-          />
-
-          <Route
-            path="/sections"
-            element={<Sections />}
-          />
-
-          <Route
-            path="/subjects"
-            element={<Subjects />}
-          />
-
-          <Route
-            path="/reports"
-            element={<Reports />}
-          />
-        
-          <Route
-            path="/semesters"
-            element={<Semesters />}
-          />
+          <Route path="/" element={<Home />} />
+          <Route path="/checkin" element={<CheckIn />} />
+          <Route path="/users" element={<Users />} />
+          <Route path="/sections" element={<Sections />} />
+          <Route path="/subjects" element={<Subjects />} />
+          <Route path="/reports" element={<Reports />} />
+          <Route path="/semesters" element={<Semesters />} />
         </Route>
       </Routes>
     </BrowserRouter>

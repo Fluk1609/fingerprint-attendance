@@ -3,7 +3,6 @@ import { NavLink, Outlet } from "react-router-dom";
 import {
   clearScannerSession,
   getScannerHealth,
-  getScannerAgentUrl,
   getScannerSession,
   pairScanner,
   unpairScanner,
@@ -31,9 +30,11 @@ function MainLayout() {
     } catch (error) {
       if (error.status === 401) clearScannerSession();
       setScannerState(error.status === 401 ? "unpaired" : "offline");
-      setScannerMessage(error.status === 401
-        ? "Session หมดอายุ กรุณา Pair ใหม่"
-        : error.message || "ไม่สามารถเชื่อมต่อ Scanner Agent ได้");
+      setScannerMessage(
+        error.status === 401
+          ? "Session หมดอายุ กรุณา Pair ใหม่"
+          : error.message || "ไม่สามารถเชื่อมต่อ Scanner Agent ได้"
+      );
       setDeviceCount(0);
     }
   }, []);
@@ -85,7 +86,8 @@ function MainLayout() {
       <header className="topbar">
         <div className="brand">ระบบสแกนลายนิ้วมือ</div>
         <nav>
-          <NavLink to="/" end>เช็คชื่อ</NavLink>
+          <NavLink to="/" end>หน้าแรก</NavLink>
+          <NavLink to="/checkin">เช็คชื่อ</NavLink>
           <NavLink to="/users">ผู้ใช้งาน</NavLink>
           <NavLink to="/sections">กลุ่มเรียน</NavLink>
           <NavLink to="/subjects">วิชา</NavLink>
@@ -107,7 +109,6 @@ function MainLayout() {
                 ● {scannerMessage}
                 {scannerState === "connected" ? ` (พบอุปกรณ์ ${deviceCount} เครื่อง)` : ""}
               </div>
-              {/* <small style={{ color: "#64748b" }}>Local endpoint: {getScannerAgentUrl()}</small> */}
             </div>
             <button type="button" onClick={checkScanner} disabled={busy}>
               ตรวจสอบอีกครั้ง
