@@ -1,0 +1,7 @@
+Flask
+Flask-Cors
+python-dotenv
+requests
+pyzkfp
+pythonnet
+pyinstaller

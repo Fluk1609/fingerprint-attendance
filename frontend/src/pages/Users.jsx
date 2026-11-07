@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { scannerRequest, restartEnrollment } from "../services/scanner-agent.service";
 
 const API_BASE_URL = (
   import.meta.env.VITE_API_BASE_URL || ""
@@ -30,6 +31,7 @@ function Users() {
   const [enrollMessage, setEnrollMessage] = useState("");
   const [enrollScanCount, setEnrollScanCount] = useState(0);
   const [successDialog, setSuccessDialog] = useState(null);
+  const [restartEnrollDialog, setRestartEnrollDialog] = useState(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const ITEMS_PER_PAGE = 10;
@@ -242,8 +244,8 @@ function Users() {
   };
 
   // Enroll fingerprint through the local Scanner Agent.
-  // The biometric template is sent directly from Agent to Cloud API, not through React.
-  const handleEnroll = async (user) => {
+  // If another enrollment is active, ask before clearing it and starting over.
+  const handleEnroll = async (user, restart = false) => {
     if (enrollingUserId !== null) return;
 
     try {
@@ -251,20 +253,15 @@ function Users() {
       setEnrollScanCount(0);
       setEnrollMessage(`กำลังเริ่มลงทะเบียน ${user.full_name}...`);
 
-      const startResponse = await fetch(
-        `${API_BASE_URL}/api/scanner/enroll/start`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ user_id: user.id }),
-        }
-      );
-
-      const startData = await startResponse.json();
-
-      if (!startResponse.ok) {
-        throw new Error(startData.message || "ไม่สามารถเริ่มลงทะเบียนได้");
-      }
+      const startData = restart
+        ? await restartEnrollment(user.id)
+        : await scannerRequest(
+            "/api/scanner/enroll/start",
+            {
+              method: "POST",
+              body: JSON.stringify({ user_id: user.id }),
+            }
+          );
 
       for (let scan = 1; scan <= 3; scan += 1) {
         setEnrollScanCount(scan);
@@ -272,36 +269,20 @@ function Users() {
           `กรุณาวางนิ้วของ ${user.full_name} บนเครื่องสแกน (ครั้งที่ ${scan}/3)`
         );
 
-        const captureResponse = await fetch(
-          `${API_BASE_URL}/api/scanner/enroll/capture`,
+        const captureData = await scannerRequest(
+          "/api/scanner/enroll/capture",
           { method: "POST" }
         );
-
-        const captureData = await captureResponse.json();
-
-        if (!captureResponse.ok) {
-          throw new Error(
-            captureData.message || `สแกนครั้งที่ ${scan} ไม่สำเร็จ`
-          );
-        }
 
         setEnrollMessage(`สแกนสำเร็จ ${captureData.scan_count}/3 ครั้ง`);
       }
 
       setEnrollMessage("กำลังรวม Template และบันทึกลงฐานข้อมูล...");
 
-      const finishResponse = await fetch(
-        `${API_BASE_URL}/api/scanner/enroll/finish`,
+      const finishData = await scannerRequest(
+        "/api/scanner/enroll/finish",
         { method: "POST" }
       );
-
-      const finishData = await finishResponse.json();
-
-      if (!finishResponse.ok) {
-        throw new Error(
-          finishData.message || "ไม่สามารถบันทึกลายนิ้วมือได้"
-        );
-      }
 
       setEnrollMessage("");
       setFormMessage("");
@@ -312,25 +293,45 @@ function Users() {
         title: "ลงทะเบียนสำเร็จ!",
         message: `ลงทะเบียนลายนิ้วมือของ ${user.full_name} เรียบร้อยแล้ว`,
       });
-
-      await fetchData();
-
     } catch (err) {
       console.error("Fingerprint enrollment error:", err);
-      setEnrollMessage(err.message || "เกิดข้อผิดพลาดในการลงทะเบียน");
 
-      try {
-        await fetch(`${API_BASE_URL}/api/scanner/enroll/cancel`, {
-          method: "POST",
-        });
-      } catch {
-        // Scanner Agent may be offline.
+      if (err.status === 409 && !restart) {
+        // Keep the existing enrollment untouched until the user confirms.
+        setEnrollMessage("");
+        setRestartEnrollDialog(user);
+        return;
       }
 
+      setEnrollMessage(
+        err.status === 401
+          ? "กรุณา Pair เครื่องสแกนก่อนลงทะเบียน"
+          : err.message || "เกิดข้อผิดพลาดในการลงทะเบียน"
+      );
+
+      // A 409 means another enrollment is active. Do not cancel it here:
+      // the user must explicitly confirm before it is replaced.
+      if (err.status !== 409) {
+        try {
+          await scannerRequest("/api/scanner/enroll/cancel", {
+            method: "POST",
+          });
+        } catch {
+          // Scanner Agent may be offline.
+        }
+      }
     } finally {
       setEnrollingUserId(null);
       setEnrollScanCount(0);
     }
+  };
+
+  const handleConfirmRestartEnrollment = async () => {
+    const user = restartEnrollDialog;
+    if (!user) return;
+
+    setRestartEnrollDialog(null);
+    await handleEnroll(user, true);
   };
 
   // Delete user
@@ -732,6 +733,45 @@ function Users() {
             </div>
           </div>
         )}
+        {restartEnrollDialog && (
+          <div
+            className="confirm-modal-overlay"
+            onClick={() => setRestartEnrollDialog(null)}
+          >
+            <div
+              className="confirm-modal"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="confirm-modal-icon">!</div>
+
+              <h2>มีรายการลงทะเบียนลายนิ้วมือค้างอยู่</h2>
+
+              <p>
+                พบรายการลงทะเบียนก่อนหน้าที่ยังไม่เสร็จสมบูรณ์
+                ต้องการยกเลิกรายการเดิมและเริ่มลงทะเบียนลายนิ้วมือของ{" "}
+                <strong>{restartEnrollDialog.full_name}</strong> ใหม่หรือไม่?
+              </p>
+
+              <div className="confirm-modal-actions">
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => setRestartEnrollDialog(null)}
+                >
+                  ยกเลิก
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleConfirmRestartEnrollment}
+                >
+                  ลงทะเบียนใหม่
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {confirmDialog && (
           <div
             className="confirm-modal-overlay"

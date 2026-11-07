@@ -58,7 +58,10 @@ def get_current_subject():
 
     response = (
         supabase.table("subjects")
-        .select("id, code, name, class_days, start_time, end_time, late_after_minutes")
+        .select(
+            "id, code, name, section_id, class_days, "
+            "start_time, end_time, late_after_minutes"
+        )
         .execute()
     )
     weekday = now.strftime("%A")
@@ -129,6 +132,7 @@ def api_current_subject():
             "id": subject.get("id"),
             "code": subject.get("code"),
             "name": subject.get("name"),
+            "section_id": subject.get("section_id"),
             "class_days": subject.get("class_days") or [],
             "start_time": str(subject.get("start_time") or "")[:5],
             "end_time": str(subject.get("end_time") or "")[:5],
@@ -222,7 +226,10 @@ def api_record_checkin():
     try:
         user_response = (
             supabase.table("users")
-            .select("id, student_id, full_name, department, fingerprint_id")
+            .select(
+                "id, student_id, full_name, department, "
+                "fingerprint_id, section_id"
+            )
             .eq("fingerprint_id", fingerprint_id)
             .limit(1)
             .execute()
@@ -234,6 +241,26 @@ def api_record_checkin():
         now = datetime.now(THAI_TZ)
         semester = get_active_semester()
         subject = get_current_subject() if semester else None
+
+        if subject:
+            user_section_id = user.get("section_id")
+            subject_section_id = subject.get("section_id")
+
+            if (
+                user_section_id is None
+                or subject_section_id is None
+                or str(user_section_id) != str(subject_section_id)
+            ):
+                return jsonify({
+                    "success": False,
+                    "matched": True,
+                    "section_mismatch": True,
+                    "message": (
+                        f"ไม่สามารถเช็คชื่อได้ เนื่องจากผู้ใช้อยู่ Section "
+                        f"{user_section_id} แต่รายวิชานี้เป็น Section "
+                        f"{subject_section_id}"
+                    )
+                }), 403
 
         if subject:
             start_time = parse_subject_start_time(subject.get("start_time"))

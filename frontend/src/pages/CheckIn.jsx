@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 
+import { scannerRequest } from "../services/scanner-agent.service";
+
 import {
     formatScanDate,
     getThaiDateString,
@@ -209,26 +211,27 @@ function CheckIn() {
 
             while (!cancelled) {
                 try {
-                    const response = await fetch(
-                        `${API_BASE_URL}/api/scanner/checkin`,
-                        {
+                    let data;
+                    let responseStatus = 200;
+                    try {
+                        data = await scannerRequest("/api/scanner/checkin", {
                             method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                        }
-                    );
-
-                    const data = await response.json().catch(() => ({}));
+                        });
+                    } catch (error) {
+                        responseStatus = error.status || 0;
+                        data = error.data || { message: error.message };
+                    }
 
                     if (cancelled) break;
 
                     // HTTP 408 means no fingerprint was placed before timeout.
                     // Keep waiting for the next scan without showing an error popup.
-                    if (response.status === 408) {
+                    if (responseStatus === 408) {
                         setScanMessage("กำลังรอวางนิ้วบนเครื่องสแกน...");
                         continue;
                     }
 
-                    if (response.ok && data.success) {
+                    if (responseStatus === 200 && data.success) {
                         const user = data.user || {};
                         const attendance = data.attendance || {};
 
@@ -253,14 +256,21 @@ function CheckIn() {
                     }
 
                     // Unknown fingerprints should not stop the continuous scan loop.
-                    if (response.status === 404) {
+                    if (responseStatus === 404) {
                         setScanMessage(data.message || "ไม่พบข้อมูลลายนิ้วมือ กรุณาลองอีกครั้ง");
                         await wait(1200);
                         continue;
                     }
 
+                    // Section mismatch: show the message and continue scanning.
+                    if (responseStatus === 403 && data.section_mismatch) {
+                        setScanMessage(data.message || "Section ไม่ตรงกัน");
+                        await wait(2000);
+                        continue;
+                    }
+
                     setScanMessage(
-                        data.message || `เครื่องสแกนตอบกลับ HTTP ${response.status}`
+                        data.message || `เครื่องสแกนตอบกลับ HTTP ${responseStatus}`
                     );
                     await wait(3000);
                 } catch (err) {
@@ -268,7 +278,7 @@ function CheckIn() {
 
                     console.error("Fingerprint check-in error:", err);
                     setScanMessage(
-                        "ไม่สามารถเชื่อมต่อ Scanner Agent ได้ กรุณาตรวจสอบว่าเปิด scanner.py อยู่"
+                        "ไม่สามารถเชื่อมต่อ Scanner Agent ได้ กรุณาเปิด ScannerAgent.exe และ Pair เครื่องก่อนใช้งาน"
                     );
                     await wait(3000);
                 }
@@ -399,8 +409,8 @@ function CheckIn() {
                                     <strong>สถานะ:</strong>{" "}
                                     {scanDialog.status === "on_time" ? "ตรงเวลา"
                                         : scanDialog.status === "late" ? "มาสาย"
-                                        : scanDialog.status === "no_class" ? "ไม่มีวิชาในเวลานี้"
-                                        : scanDialog.status ?? "-"}
+                                            : scanDialog.status === "no_class" ? "ไม่มีวิชาในเวลานี้"
+                                                : scanDialog.status ?? "-"}
                                 </p>
                                 <p>
                                     <strong>เวลาสแกน:</strong>{" "}
@@ -427,7 +437,7 @@ function CheckIn() {
             </div>
 
             {/* Current Semester */}
-            <div
+            {/* <div
                 className="card"
                 style={{
                     marginBottom: "1rem",
@@ -467,7 +477,7 @@ function CheckIn() {
                         ยังไม่มีภาคเรียนที่เปิดใช้งาน
                     </p>
                 )}
-            </div>
+            </div> */}
 
             {/* Current Subject */}
             <div
@@ -495,6 +505,11 @@ function CheckIn() {
                             </p>
 
                             <p>
+                                <strong>กลุ่มเรียน:</strong>{" "}
+                                {currentSubject.section_id ?? "-"}
+                            </p>
+
+                            <p>
                                 <strong>เวลาเรียน:</strong>{" "}
                                 {currentSubject.start_time ?? "-"}
                                 {" - "}
@@ -511,106 +526,106 @@ function CheckIn() {
 
             {/* Recent Scan Logs: show only when a subject is active */}
             {currentSubject?.active && (
-            <div className="card">
-                <div className="table-container">
-                    <table
-                        className="data-table"
-                        id="scan-table"
-                    >
-                        <thead>
-                            <tr>
-                                <th>เวลาที่สแกน</th>
-                                <th>รหัสนักศึกษา/บุคลากร</th>
-                                <th>ชื่อ-นามสกุล</th>
-                                <th>หน่วยงาน/สาขา</th>
-                                <th>รายวิชา</th>
-                                <th>สถานะ</th>
-                                <th>จำนวนมาเรียน</th>
-                                <th>จำนวนขาดเรียน</th>
-                            </tr>
-                        </thead>
-
-                        <tbody>
-                            {loading ? (
+                <div className="card">
+                    <div className="table-container">
+                        <table
+                            className="data-table"
+                            id="scan-table"
+                        >
+                            <thead>
                                 <tr>
-                                    <td
-                                        colSpan="8"
-                                        className="empty"
-                                    >
-                                        กำลังโหลดข้อมูล...
-                                    </td>
+                                    <th>เวลาที่สแกน</th>
+                                    <th>รหัสนักศึกษา/บุคลากร</th>
+                                    <th>ชื่อ-นามสกุล</th>
+                                    <th>หน่วยงาน/สาขา</th>
+                                    <th>รายวิชา</th>
+                                    <th>สถานะ</th>
+                                    <th>จำนวนมาเรียน</th>
+                                    <th>จำนวนขาดเรียน</th>
                                 </tr>
-                            ) : scans.length === 0 ? (
-                                <tr>
-                                    <td
-                                        colSpan="8"
-                                        className="empty"
-                                    >
-                                        วันนี้ยังไม่มีรายการสแกน
-                                    </td>
-                                </tr>
-                            ) : (
-                                scans.map((log, index) => (
-                                    <tr
-                                        key={
-                                            log.id ??
-                                            `${log.scanned_at}-${index}`
-                                        }
-                                    >
-                                        <td data-label="เวลาที่สแกน">
-                                            {formatScanDate(
-                                                log.scanned_at
-                                            )}
-                                        </td>
+                            </thead>
 
-                                        <td data-label="รหัสนักศึกษา/บุคลากร">
-                                            {log.student_id ?? "-"}
-                                        </td>
-
-                                        <td data-label="ชื่อ-นามสกุล">
-                                            {log.full_name ?? "-"}
-                                        </td>
-
-                                        <td data-label="หน่วยงาน/สาขา">
-                                            {log.department ?? "-"}
-                                        </td>
-
-                                        <td data-label="รายวิชา">
-                                            {log.subject_code ??
-                                                log.subject_name ??
-                                                "-"}
-                                        </td>
-
-                                        <td data-label="สถานะ">
-                                            {getStatus(
-                                                log.status,
-                                                log.fingerprint_id
-                                            )}
-                                        </td>
-
-                                        <td data-label="จำนวนมาเรียน">
-                                            {log.attended_count ?? 0}
-                                        </td>
-
-                                        <td data-label="จำนวนขาดเรียน">
-                                            {log.absent_count ?? 0}
+                            <tbody>
+                                {loading ? (
+                                    <tr>
+                                        <td
+                                            colSpan="8"
+                                            className="empty"
+                                        >
+                                            กำลังโหลดข้อมูล...
                                         </td>
                                     </tr>
-                                ))
-                            )}
-                        </tbody>
-                    </table>
-                </div>
+                                ) : scans.length === 0 ? (
+                                    <tr>
+                                        <td
+                                            colSpan="8"
+                                            className="empty"
+                                        >
+                                            วันนี้ยังไม่มีรายการสแกน
+                                        </td>
+                                    </tr>
+                                ) : (
+                                    scans.map((log, index) => (
+                                        <tr
+                                            key={
+                                                log.id ??
+                                                `${log.scanned_at}-${index}`
+                                            }
+                                        >
+                                            <td data-label="เวลาที่สแกน">
+                                                {formatScanDate(
+                                                    log.scanned_at
+                                                )}
+                                            </td>
 
-                {error && (
-                    <p
-                        className="hint"
-                        role="alert"
-                    >
-                        {error}
-                    </p>
-                )}
-            </div>
+                                            <td data-label="รหัสนักศึกษา/บุคลากร">
+                                                {log.student_id ?? "-"}
+                                            </td>
+
+                                            <td data-label="ชื่อ-นามสกุล">
+                                                {log.full_name ?? "-"}
+                                            </td>
+
+                                            <td data-label="หน่วยงาน/สาขา">
+                                                {log.department ?? "-"}
+                                            </td>
+
+                                            <td data-label="รายวิชา">
+                                                {log.subject_code ??
+                                                    log.subject_name ??
+                                                    "-"}
+                                            </td>
+
+                                            <td data-label="สถานะ">
+                                                {getStatus(
+                                                    log.status,
+                                                    log.fingerprint_id
+                                                )}
+                                            </td>
+
+                                            <td data-label="จำนวนมาเรียน">
+                                                {log.attended_count ?? 0}
+                                            </td>
+
+                                            <td data-label="จำนวนขาดเรียน">
+                                                {log.absent_count ?? 0}
+                                            </td>
+                                        </tr>
+                                    ))
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
+
+                    {error && (
+                        <p
+                            className="hint"
+                            role="alert"
+                        >
+                            {error}
+                        </p>
+                    )}
+                </div>
             )}
 
         </>
